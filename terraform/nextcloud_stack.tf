@@ -83,6 +83,6 @@ output "nextcloud_backend_target" {
   value       = module.nimbus_nextcloud.backend_target
 }
 
-output "nimbus_rds_host"    { value = module.nimbus_rds.host }
+output "nimbus_rds_host" { value = module.nimbus_rds.host }
 output "nimbus_s3_endpoint" { value = module.nimbus_s3.endpoint }
-output "nimbus_s3_console"  { value = module.nimbus_s3.console_url }
+output "nimbus_s3_console" { value = module.nimbus_s3.console_url }

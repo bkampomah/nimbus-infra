@@ -123,7 +123,7 @@ variable "subnets" {
       cidr    = "10.0.100.0/24"
       gateway = "10.0.100.1"
       bridge  = "vmbr4" # CHANGE_ME
-      public  = true   # mgmt is reachable from pfSense/bastion
+      public  = true    # mgmt is reachable from pfSense/bastion
     }
   }
 }
@@ -242,17 +242,17 @@ variable "nextcloud_s3_secret_key" {
 variable "nimbus_dns_static_ip" {
   description = "Static IP (with CIDR) for nimbus-dns inside the mgmt subnet"
   type        = string
-  default     = "10.0.100.10/24"  # CHANGE_ME if your mgmt subnet differs
+  default     = "10.0.100.10/24" # CHANGE_ME if your mgmt subnet differs
 }
 
 variable "nimbus_aio_ip" {
   description = "Current IP of your Nextcloud AIO VM on the nimbus-app subnet"
   type        = string
-  default     = "10.0.10.101"     # CHANGE_ME — confirm with `ip -4 addr` on AIO
+  default     = "10.0.10.101" # CHANGE_ME — confirm with `ip -4 addr` on AIO
 }
 
 variable "nimbus_alb_ip" {
   description = "Planned IP of nimbus-alb (placeholder until Phase 4 lands)"
   type        = string
-  default     = "10.0.1.10"       # CHANGE_ME later when ALB is built
+  default     = "10.0.1.10" # CHANGE_ME later when ALB is built
 }

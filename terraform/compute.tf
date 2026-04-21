@@ -14,7 +14,7 @@ locals {
   instances = {
     # ── Public tier ────────────────────────────────────────────────────────
     "${var.company_name}-bastion" = {
-      subnet = "mgmt"   # mgmt so SSH-from-bastion rules align; or put in public if you prefer
+      subnet = "mgmt" # mgmt so SSH-from-bastion rules align; or put in public if you prefer
       cpu    = 1
       ram    = 1024
       disk   = 20
@@ -133,7 +133,7 @@ resource "proxmox_virtual_environment_vm" "instances" {
   # Cloud-init config. DHCP from pfSense inside the VNet — same as AWS
   # where each ENI gets an IP from the subnet's DHCP pool.
   initialization {
-    datastore_id = var.proxmox_vm_storage
+    datastore_id      = var.proxmox_vm_storage
     user_data_file_id = proxmox_virtual_environment_file.user_data[each.key].id
 
     ip_config {
