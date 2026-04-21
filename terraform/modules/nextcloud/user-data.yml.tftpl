@@ -1,0 +1,276 @@
+#cloud-config
+# ---------------------------------------------------------------------------
+# cloud-init for a Nimbus Nextcloud app-tier VM
+#
+# Pipeline:
+#   1. Create the Nimbus admin user + SSH keys (matches every other Nimbus VM)
+#   2. Install nginx + PHP 8.3 + Nextcloud prerequisites + PostgreSQL client
+#   3. Download Nextcloud, run `occ maintenance:install` against nimbus-rds
+#   4. Add MinIO as Primary Object Storage (S3 Primary pattern)
+#   5. Configure nginx to accept plain HTTP from the ALB only
+#
+# TLS is terminated on the ALB (nimbus-alb) upstream. The VM speaks plain
+# HTTP on port 80; Nextcloud is told to trust X-Forwarded-* headers from
+# the ALB's subnet.
+# ---------------------------------------------------------------------------
+
+hostname: ${hostname}
+manage_etc_hosts: true
+preserve_hostname: false
+
+users:
+  - name: ${admin_username}
+    groups: [sudo, adm]
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    lock_passwd: false
+    ssh_authorized_keys:
+%{ for key in admin_ssh_keys ~}
+      - ${key}
+%{ endfor ~}
+
+chpasswd:
+  expire: false
+  list: |
+    ${admin_username}:${admin_password}
+
+ssh_pwauth: true
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - qemu-guest-agent
+  - nginx
+  - php8.3-fpm
+  - php8.3-cli
+  - php8.3-common
+  - php8.3-curl
+  - php8.3-gd
+  - php8.3-mbstring
+  - php8.3-xml
+  - php8.3-zip
+  - php8.3-pgsql
+  - php8.3-intl
+  - php8.3-bcmath
+  - php8.3-gmp
+  - php8.3-imagick
+  - php8.3-apcu
+  - php8.3-redis
+  - postgresql-client
+  - redis-tools
+  - unzip
+  - sudo
+  - curl
+  - chrony
+  - unattended-upgrades
+
+write_files:
+  # ── PHP-FPM tuning ────────────────────────────────────────────────────────
+  - path: /etc/php/8.3/fpm/conf.d/99-nextcloud.ini
+    owner: root:root
+    permissions: '0644'
+    content: |
+      ; Nimbus Nextcloud overrides
+      memory_limit = 1024M
+      upload_max_filesize = 16G
+      post_max_size = 16G
+      max_execution_time = 3600
+      max_input_time = 3600
+      output_buffering = Off
+      opcache.enable = 1
+      opcache.interned_strings_buffer = 32
+      opcache.max_accelerated_files = 10000
+      opcache.memory_consumption = 256
+      opcache.save_comments = 1
+      opcache.revalidate_freq = 60
+      apc.enable_cli = 1
+
+  # ── nginx site for Nextcloud ──────────────────────────────────────────────
+  # Listens on plain HTTP:80. The ALB adds TLS and X-Forwarded-* headers.
+  - path: /etc/nginx/sites-available/nextcloud
+    owner: root:root
+    permissions: '0644'
+    content: |
+      upstream php-handler {
+          server unix:/run/php/php8.3-fpm.sock;
+      }
+
+      map $arg_v $asset_immutable {
+          "" "";
+          default ", immutable";
+      }
+
+      server {
+          listen 80 default_server;
+          listen [::]:80 default_server;
+          server_name ${nextcloud_domain};
+
+          # Trust the ALB and (when fronted by Cloudflare Tunnel) Cloudflare's
+          # edge IPs. With this, Nextcloud sees the real client IP instead of
+          # the ALB or the cloudflared sidecar.
+%{ for cidr in trusted_proxies ~}
+          set_real_ip_from ${cidr};
+%{ endfor ~}
+          # CF-Connecting-IP is the canonical header Cloudflare sets.
+          # When traffic comes from the ALB without Cloudflare, this header
+          # is absent and nginx falls through to X-Forwarded-For.
+          real_ip_header CF-Connecting-IP;
+          real_ip_recursive on;
+
+          root /var/www/nextcloud;
+          index index.php index.html /index.php$request_uri;
+
+          client_max_body_size 16G;
+          client_body_timeout 300s;
+          fastcgi_buffers 64 4K;
+
+          gzip on;
+          gzip_vary on;
+          gzip_comp_level 4;
+          gzip_min_length 256;
+          gzip_types application/atom+xml application/javascript application/json application/ld+json application/manifest+json application/rss+xml application/vnd.geo+json application/vnd.ms-fontobject application/wasm application/x-font-ttf application/x-web-app-manifest+json application/xhtml+xml application/xml font/opentype image/bmp image/svg+xml image/x-icon text/cache-manifest text/css text/plain text/vcard text/vnd.rim.location.xloc text/vtt text/x-component text/x-cross-domain-policy;
+
+          # Security headers (kept minimal; ALB adds HSTS etc.)
+          add_header Referrer-Policy "no-referrer" always;
+          add_header X-Content-Type-Options "nosniff" always;
+          add_header X-Frame-Options "SAMEORIGIN" always;
+          add_header X-Permitted-Cross-Domain-Policies "none" always;
+          add_header X-Robots-Tag "noindex, nofollow" always;
+          add_header X-XSS-Protection "1; mode=block" always;
+          fastcgi_hide_header X-Powered-By;
+
+          location = /robots.txt { allow all; log_not_found off; access_log off; }
+
+          location ^~ /.well-known {
+              location = /.well-known/carddav    { return 301 /remote.php/dav/; }
+              location = /.well-known/caldav     { return 301 /remote.php/dav/; }
+              location /.well-known/acme-challenge { try_files $uri $uri/ =404; }
+              location /.well-known/pki-validation { try_files $uri $uri/ =404; }
+              return 301 /index.php$request_uri;
+          }
+
+          location ~ ^/(?:build|tests|config|lib|3rdparty|templates|data)(?:$|/) { return 404; }
+          location ~ ^/(?:\.|autotest|occ|issue|indie|db_|console) { return 404; }
+
+          location ~ \.php(?:$|/) {
+              rewrite ^/(?!index|remote|public|cron|core\/ajax\/update|status|ocs\/v[12]|updater\/.+|oc[ms]-provider\/.+|.+\/richdocumentscode\/proxy) /index.php$request_uri;
+              fastcgi_split_path_info ^(.+?\.php)(/.*)$;
+              set $path_info $fastcgi_path_info;
+              try_files $fastcgi_script_name =404;
+              include fastcgi_params;
+              fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+              fastcgi_param PATH_INFO $path_info;
+              fastcgi_param HTTPS on;
+              fastcgi_param modHeadersAvailable true;
+              fastcgi_param front_controller_active true;
+              fastcgi_pass php-handler;
+              fastcgi_intercept_errors on;
+              fastcgi_request_buffering off;
+              fastcgi_max_temp_file_size 0;
+          }
+
+          location ~ \.(?:css|js|svg|gif|png|jpg|ico|wasm|tflite|map)$ {
+              try_files $uri /index.php$request_uri;
+              add_header Cache-Control "public, max-age=15778463$asset_immutable";
+              add_header Referrer-Policy "no-referrer" always;
+              add_header X-Content-Type-Options "nosniff" always;
+              add_header X-Frame-Options "SAMEORIGIN" always;
+              access_log off;
+          }
+
+          location / { try_files $uri $uri/ /index.php$request_uri; }
+      }
+
+  # ── Installer script (runs once after packages are in place) ──────────────
+  - path: /root/install-nextcloud.sh
+    owner: root:root
+    permissions: '0700'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      NC_VERSION="29.0.7"     # CHANGE_ME to bump Nextcloud; see nextcloud.com/changelog
+      NC_WEBROOT="/var/www/nextcloud"
+
+      if [ -d "$NC_WEBROOT" ]; then
+        echo "Nextcloud already installed, skipping."
+        exit 0
+      fi
+
+      cd /tmp
+      curl -fsSL -o nextcloud.tar.bz2 \
+        "https://download.nextcloud.com/server/releases/nextcloud-$NC_VERSION.tar.bz2"
+      tar -xjf nextcloud.tar.bz2 -C /var/www/
+      chown -R www-data:www-data "$NC_WEBROOT"
+
+      # Make sure PostgreSQL is reachable before we try the install
+      until pg_isready -h "${db_host}" -U "${db_user}" -d "${db_name}"; do
+        echo "Waiting for Postgres at ${db_host}..."; sleep 3
+      done
+
+      sudo -u www-data php "$NC_WEBROOT/occ" maintenance:install \
+        --database="pgsql" \
+        --database-host="${db_host}" \
+        --database-name="${db_name}" \
+        --database-user="${db_user}" \
+        --database-pass='${db_password}' \
+        --admin-user="${admin_username}" \
+        --admin-pass='${nextcloud_admin_pw}' \
+        --data-dir="$NC_WEBROOT/data"
+
+      # ── Trusted domain + proxy config ──────────────────────────────────────
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set trusted_domains 1 --value="${nextcloud_domain}"
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set overwrite.cli.url --value="https://${nextcloud_domain}"
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set overwriteprotocol --value="https"
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set overwritehost --value="${nextcloud_domain}"
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set default_phone_region --value="US"
+
+      # Trusted proxies = ALB subnet(s)
+      idx=0
+%{ for cidr in trusted_proxies ~}
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set trusted_proxies $idx --value='${cidr}'
+      idx=$((idx+1))
+%{ endfor ~}
+
+      # ── MinIO as Primary Object Storage ────────────────────────────────────
+      # This is the "S3 Primary" pattern. Nextcloud stores all user files as
+      # objects in MinIO, not on local disk. Matches how AWS customers run
+      # EFS-less apps with S3 as the data layer.
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore class --value='\\OC\\Files\\ObjectStore\\S3'
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments bucket --value='${s3_bucket}'
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments autocreate --value=true --type=boolean
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments key --value='${s3_access_key}'
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments secret --value='${s3_secret_key}'
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments hostname \
+        --value="$(echo '${s3_endpoint}' | sed -E 's|https?://||' | cut -d: -f1)"
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments port \
+        --value="$(echo '${s3_endpoint}' | sed -E 's|https?://||' | awk -F: '{print ($2 ? $2 : 9000)}')"
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments use_ssl \
+        --value="$(echo '${s3_endpoint}' | grep -q '^https' && echo true || echo false)" --type=boolean
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments use_path_style \
+        --value=true --type=boolean
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments region --value='us-east-1'
+
+      # ── Cron (the "correct" background job backend per Nextcloud docs) ────
+      crontab -u www-data - <<EOF
+*/5 * * * * php -f $NC_WEBROOT/cron.php
+EOF
+      sudo -u www-data php "$NC_WEBROOT/occ" background:cron
+
+      # ── nginx + PHP-FPM ────────────────────────────────────────────────────
+      rm -f /etc/nginx/sites-enabled/default
+      ln -sf /etc/nginx/sites-available/nextcloud /etc/nginx/sites-enabled/nextcloud
+      systemctl reload php8.3-fpm
+      systemctl reload nginx
+
+      echo "Nextcloud install complete."
+
+runcmd:
+  - [ systemctl, enable, --now, qemu-guest-agent ]
+  - [ systemctl, enable, --now, chrony ]
+  - [ systemctl, enable, --now, php8.3-fpm ]
+  - [ systemctl, enable, --now, nginx ]
+  - [ bash, /root/install-nextcloud.sh ]
+
+final_message: "Nimbus Nextcloud node ${hostname} ready after $UPTIME seconds"

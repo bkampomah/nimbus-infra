@@ -1,0 +1,98 @@
+#cloud-config
+# ---------------------------------------------------------------------------
+# cloud-init for nimbus-rds (PostgreSQL 16 on Ubuntu 24.04)
+# Creates one initial database + role (for Nextcloud), binds Postgres to all
+# interfaces, and writes a pg_hba.conf that only allows traffic from the
+# app-tier CIDR.
+# ---------------------------------------------------------------------------
+
+hostname: ${hostname}
+manage_etc_hosts: true
+preserve_hostname: false
+
+users:
+  - name: ${admin_username}
+    groups: [sudo, adm]
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    lock_passwd: false
+    ssh_authorized_keys:
+%{ for key in admin_ssh_keys ~}
+      - ${key}
+%{ endfor ~}
+
+chpasswd:
+  expire: false
+  list: |
+    ${admin_username}:${admin_password}
+
+ssh_pwauth: true
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - qemu-guest-agent
+  - postgresql-16
+  - postgresql-contrib-16
+  - chrony
+  - unattended-upgrades
+
+write_files:
+  # Listen on all interfaces (Proxmox firewall + pg_hba do the filtering)
+  - path: /etc/postgresql/16/main/conf.d/10-nimbus-listen.conf
+    owner: postgres:postgres
+    permissions: '0644'
+    content: |
+      listen_addresses = '*'
+
+  # Only allow the app subnet to connect, using scram-sha-256 passwords
+  - path: /etc/postgresql/16/main/conf.d/10-nimbus-hba.sh
+    owner: root:root
+    permissions: '0700'
+    content: |
+      #!/bin/bash
+      set -e
+      HBA=/etc/postgresql/16/main/pg_hba.conf
+      grep -q "nimbus-rds-managed" "$HBA" || cat >> "$HBA" <<EOF
+
+      # nimbus-rds-managed (do not edit above line, it's the marker)
+      host    all    all    ${allowed_cidr}    scram-sha-256
+      EOF
+
+  - path: /root/init-nimbus-rds.sh
+    owner: root:root
+    permissions: '0700'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      bash /etc/postgresql/16/main/conf.d/10-nimbus-hba.sh
+      systemctl restart postgresql
+
+      # Create role + DB if they don't exist (idempotent).
+      sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
+      DO \$\$
+      BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${initial_db_user}') THEN
+          CREATE ROLE ${initial_db_user} LOGIN PASSWORD '${initial_db_pw}';
+        ELSE
+          ALTER ROLE ${initial_db_user} WITH PASSWORD '${initial_db_pw}';
+        END IF;
+      END
+      \$\$;
+      SQL
+
+      if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${initial_db_name}'" | grep -q 1; then
+        sudo -u postgres createdb -O ${initial_db_user} ${initial_db_name}
+      fi
+
+      echo "nimbus-rds bootstrap complete."
+
+runcmd:
+  - [ systemctl, enable, --now, qemu-guest-agent ]
+  - [ systemctl, enable, --now, chrony ]
+  - [ systemctl, enable, --now, postgresql ]
+  - [ bash, /root/init-nimbus-rds.sh ]
+
+final_message: "nimbus-rds ${hostname} ready after $UPTIME seconds"

@@ -1,0 +1,95 @@
+# ============================================================================
+# terraform.tfvars.example
+#
+# Copy this file to `terraform.tfvars` and fill in every CHANGE_ME.
+# `terraform.tfvars` is gitignored — never commit real secrets.
+#
+# Quick start:
+#   cp terraform.tfvars.example terraform.tfvars
+#   $EDITOR terraform.tfvars
+# ============================================================================
+
+# ─── Proxmox connection ─────────────────────────────────────────────────────
+# CHANGE_ME: URL of your Proxmox web UI, trailing slash required.
+proxmox_endpoint  = "https://CHANGE_ME_PROXMOX_IP:8006/"
+
+# CHANGE_ME: API token in the format "user@realm!tokenid=uuid-secret".
+# Create with:   pveum user token add terraform@pve tf-token --privsep 0
+proxmox_api_token = "terraform@pve!tf-token=CHANGE_ME_UUID_SECRET"
+
+# CHANGE_ME: Proxmox node name. Run `pvesh get /nodes` on the host to see it.
+proxmox_node      = "CHANGE_ME_NODE_NAME"
+
+# CHANGE_ME (optional): storage pool for VM disks.
+# `pvesm status` will list your pools. Common values: local-lvm, local-zfs, ceph-rbd.
+proxmox_vm_storage = "local-lvm"
+
+# ─── Nimbus admin identity ──────────────────────────────────────────────────
+admin_username = "Nimbus"
+
+# LAB value. Rotate for anything serious.
+admin_password = "changeme"
+
+# CHANGE_ME: paste the output of `cat ~/.ssh/id_ed25519.pub` (or id_rsa.pub).
+admin_ssh_public_keys = [
+  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI_CHANGE_ME_PUBLIC_KEY your-email@example.com",
+]
+
+# ─── Network ────────────────────────────────────────────────────────────────
+# Defaults in variables.tf already match the README diagram.
+# If you created SDN VNets with different names, override the `subnets`
+# map here. Example:
+#
+# subnets = {
+#   public = { cidr = "10.0.1.0/24",   gateway = "10.0.1.1",   bridge = "nimbus-public", public = true  }
+#   app    = { cidr = "10.0.10.0/24",  gateway = "10.0.10.1",  bridge = "nimbus-app",    public = false }
+#   data   = { cidr = "10.0.20.0/24",  gateway = "10.0.20.1",  bridge = "nimbus-data",   public = false }
+#   mgmt   = { cidr = "10.0.100.0/24", gateway = "10.0.100.1", bridge = "nimbus-mgmt",   public = true  }
+# }
+
+# ─── Golden image ───────────────────────────────────────────────────────────
+# CHANGE_ME if you built your Ubuntu 24.04 cloud-init template with a
+# different VMID than the default (9000).
+template_vm_id = 9000
+
+# ─── Nextcloud stack (nimbus-rds + nimbus-s3 + nimbus-cloud-01) ─────────────
+# Public hostname users will hit. With a Cloudflare Tunnel this is your
+# Cloudflare domain; no public DNS on your side required.
+nextcloud_domain = "nimbuscloud.org"
+
+# CHANGE_ME: Cloudflare Tunnel token.
+# 1. Cloudflare Zero Trust dashboard → Networks → Tunnels → Create a tunnel
+# 2. Name it "nimbus-alb" (or whatever), pick "Cloudflared"
+# 3. Copy the token from the install command it shows you
+#    (the long string after `--token`)
+# 4. Paste it here. Leave "" to skip cloudflared install.
+cloudflare_tunnel_token = "CHANGE_ME_cloudflare_tunnel_token"
+
+# CHANGE_ME: initial password for the Nextcloud web UI admin account.
+# You can change it inside Nextcloud after install. Do NOT reuse `changeme`.
+nextcloud_admin_password = "CHANGE_ME_nextcloud_admin_pw"
+
+# CHANGE_ME: PostgreSQL password for the `nextcloud` role on nimbus-rds.
+nextcloud_db_password = "CHANGE_ME_nextcloud_db_pw"
+
+# CHANGE_ME: MinIO root (admin) password — min 8 chars.
+minio_root_user     = "nimbus-admin"
+minio_root_password = "CHANGE_ME_minio_root_pw"
+
+# CHANGE_ME: IAM-style access/secret pair MinIO will use for Nextcloud.
+# Convention: 20-char access key, 40-char secret. Generate with:
+#   openssl rand -hex 10   # access key
+#   openssl rand -hex 20   # secret key
+nextcloud_s3_access_key = "CHANGE_ME_20_CHAR_ACCESS_KEY"
+nextcloud_s3_secret_key = "CHANGE_ME_40_CHAR_SECRET_KEY"
+
+# ─── nimbus-dns (Phase 3) ───────────────────────────────────────────────────
+# Static IP in the mgmt subnet. Every Nimbus client will point DNS here.
+nimbus_dns_static_ip = "10.0.100.10/24"
+
+# CHANGE_ME: current IP of your Nextcloud AIO on nimbus-app.
+# Confirm with: ip -4 addr show ens19  (on the AIO host)
+nimbus_aio_ip = "10.0.10.101"
+
+# Planned IP for nimbus-alb (Phase 4). Leave as-is for now.
+nimbus_alb_ip = "10.0.1.10"

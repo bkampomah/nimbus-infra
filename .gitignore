@@ -1,0 +1,29 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+
+# Never commit real secrets / per-environment inputs
+terraform.tfvars
+*.auto.tfvars
+*.tfvars.json
+!terraform.tfvars.example
+
+# Lock file — COMMIT this in most cases. Keep the next line commented.
+# .terraform.lock.hcl
+
+# SSH keys, certs
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# IDE / OS noise
+.vscode/
+.idea/
+.DS_Store
+*.swp

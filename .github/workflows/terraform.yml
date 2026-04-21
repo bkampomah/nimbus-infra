@@ -1,0 +1,147 @@
+# .github/workflows/terraform.yml
+#
+# GitOps workflow for Nimbus:
+#   - Pull request  -> terraform fmt + validate + plan, posts the plan as a PR comment
+#   - Push to main  -> terraform apply (with required approval via environment)
+#   - Nightly       -> drift detection, opens an issue if anything has moved
+
+name: terraform
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['terraform/**', 'cloud-init/**', '.github/workflows/terraform.yml']
+  push:
+    branches: [main]
+    paths: ['terraform/**', 'cloud-init/**']
+  schedule:
+    - cron: '17 4 * * *'   # nightly drift check at 04:17 UTC
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  WORKING_DIR: terraform
+
+  # CHANGE_ME only if you don't use the default secret names below.
+  # These are consumed by bpg/proxmox automatically via provider env vars.
+  PROXMOX_VE_ENDPOINT:          ${{ secrets.PROXMOX_VE_ENDPOINT }}
+  PROXMOX_VE_API_TOKEN:         ${{ secrets.PROXMOX_VE_API_TOKEN }}
+  PROXMOX_VE_SSH_USERNAME:      ${{ secrets.PROXMOX_VE_SSH_USERNAME }}
+  PROXMOX_VE_SSH_PRIVATE_KEY:   ${{ secrets.PROXMOX_VE_SSH_PRIVATE_KEY }}
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # fmt + validate + plan — runs on every PR
+  # ─────────────────────────────────────────────────────────────────────────
+  plan:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: terraform init
+        run: terraform init -backend=false
+
+      - name: terraform validate
+        run: terraform validate -no-color
+
+      - name: terraform init (with backend)
+        run: terraform init
+
+      - name: terraform plan
+        id: plan
+        run: |
+          terraform plan -no-color -out=tfplan | tee plan.txt
+        continue-on-error: true
+
+      - name: comment plan on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('${{ env.WORKING_DIR }}/plan.txt', 'utf8');
+            const max = 60000;
+            const body = `### terraform plan\n\`\`\`hcl\n${plan.length > max ? plan.slice(0, max) + '\n…truncated' : plan}\n\`\`\``;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+      - name: fail if plan errored
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # apply — runs on merge to main
+  # ─────────────────────────────────────────────────────────────────────────
+  apply:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # CHANGE_ME: create an Environment named "prod" in repo Settings →
+    # Environments and add required reviewers to gate applies.
+    environment: prod
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+
+      - run: terraform init
+
+      - run: terraform apply -auto-approve
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # drift — nightly plan; files an issue if state doesn't match reality
+  # ─────────────────────────────────────────────────────────────────────────
+  drift:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+      - run: terraform init
+      - id: plan
+        run: |
+          set +e
+          terraform plan -detailed-exitcode -no-color > drift.txt
+          echo "exitcode=$?" >> "$GITHUB_OUTPUT"
+      - name: open issue if drift detected
+        if: steps.plan.outputs.exitcode == '2'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('${{ env.WORKING_DIR }}/drift.txt', 'utf8');
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Terraform drift detected — ${new Date().toISOString().slice(0,10)}`,
+              body: '```\n' + body.slice(0, 60000) + '\n```',
+              labels: ['drift', 'infra'],
+            });
