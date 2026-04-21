@@ -28,15 +28,15 @@ resource "proxmox_virtual_environment_file" "user_data" {
   source_raw {
     file_name = "${var.name}-user-data.yaml"
     data = templatefile("${path.module}/user-data.yml.tftpl", {
-      hostname              = var.name
-      admin_username        = var.admin_username
-      admin_password        = var.admin_password
-      admin_ssh_keys        = var.admin_ssh_keys
-      minio_root_user       = var.minio_root_user
-      minio_root_password   = var.minio_root_password
-      nextcloud_bucket      = var.nextcloud_bucket
-      nextcloud_access_key  = var.nextcloud_access_key
-      nextcloud_secret_key  = var.nextcloud_secret_key
+      hostname             = var.name
+      admin_username       = var.admin_username
+      admin_password       = var.admin_password
+      admin_ssh_keys       = var.admin_ssh_keys
+      minio_root_user      = var.minio_root_user
+      minio_root_password  = var.minio_root_password
+      nextcloud_bucket     = var.nextcloud_bucket
+      nextcloud_access_key = var.nextcloud_access_key
+      nextcloud_secret_key = var.nextcloud_secret_key
     })
   }
 }

@@ -96,10 +96,10 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "bastion"
   comment = "Bastion host — SSH from your known IPs only"
 
   rule {
-    type    = "in"
-    action  = "ACCEPT"
-    proto   = "tcp"
-    dport   = "22"
+    type   = "in"
+    action = "ACCEPT"
+    proto  = "tcp"
+    dport  = "22"
     # CHANGE_ME: your home/office public IP (find via `curl ifconfig.me`).
     # Leave as 0.0.0.0/0 ONLY for a throwaway lab — that's world-open SSH.
     source  = "203.0.113.10/32"
