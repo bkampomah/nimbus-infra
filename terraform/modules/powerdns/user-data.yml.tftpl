@@ -3,17 +3,21 @@
 # cloud-init for nimbus-dns (PowerDNS auth + recursor on Ubuntu 24.04)
 #
 # Layout (ports):
-#   53  → pdns_recursor (clients point here — it forwards or recurses)
-#   5300 (localhost)    → pdns_server (authoritative)
-#   8081                → PowerDNS HTTP API (Terraform talks to this)
+#   53    -> pdns_recursor (clients point here, forwards/recurses)
+#   5300  -> pdns_server (authoritative, localhost-only)
+#   8081  -> PowerDNS HTTP API (Terraform talks to this)
 #
-# Why both? The recursor handles "google.com" queries (forward upstream).
-# The auth server handles "nimbus.local" and "nimbusnode.org". The recursor
-# is configured to delegate internal zones to the auth server via
-# forward-zones-recurse=+.
-#
-# This is how Route 53 Resolver works conceptually: one entry point, split
-# by zone, authoritative data for your zones + resolution for the world.
+# This template was rebuilt after several real-world troubleshooting passes.
+# Known issues it addresses:
+#   1. Ubuntu 24.04 ships systemd-resolved on :53 - disable it before pdns-recursor
+#   2. pdns-recursor 5.x "forward-zones+=" append syntax needs a parent; use
+#      single-line "forward-zones=a=x, b=y" form instead
+#   3. The pdns-backend-sqlite3 package does NOT auto-create the database;
+#      we initialize it from the schema file before starting pdns
+#   4. The zone-seed step must run AFTER pdns is fully up, not in parallel
+#   5. /etc/resolv.conf gets symlinked to systemd-resolved's stub by default;
+#      after we disable resolved, we point it at 127.0.0.1 so the VM can
+#      resolve names through its own recursor
 # ---------------------------------------------------------------------------
 
 hostname: ${hostname}
@@ -49,12 +53,11 @@ packages:
   - sqlite3
   - chrony
   - unattended-upgrades
-  - dnsutils       # dig, host — you'll use these a lot while debugging
+  - dnsutils
 
 write_files:
-  # ── pdns_server (authoritative) ──────────────────────────────────────────
-  # Binds to 127.0.0.1:5300 so the recursor can forward internal zones
-  # without conflicting on port 53.
+  # pdns_server (authoritative) - binds to 127.0.0.1:5300 so the recursor
+  # can forward internal zones without conflicting on port 53.
   - path: /etc/powerdns/pdns.conf
     owner: root:root
     permissions: '0640'
@@ -80,7 +83,9 @@ write_files:
       loglevel=4
       disable-syslog=no
 
-  # ── pdns_recursor (what clients actually hit on :53) ─────────────────────
+  # pdns_recursor - what clients actually hit on :53. All internal zones
+  # forwarded to 127.0.0.1:5300 in a single comma-separated line (do NOT
+  # use the "+=" append syntax, it fails without a parent "forward-zones=").
   - path: /etc/powerdns/recursor.conf
     owner: root:root
     permissions: '0644'
@@ -88,54 +93,81 @@ write_files:
       local-address=0.0.0.0
       local-port=53
 
-      allow-from=10.0.0.0/16, 127.0.0.0/8
+      allow-from=10.0.0.0/16, 192.168.0.0/16, 127.0.0.0/8
 
-      # Forward external queries to upstream resolvers.
       forward-zones-recurse=.=${join(";", upstream_dns)}
 
-      # Delegate internal zones to the local auth server.
-      # Each internal zone gets a forward-zones line pointing to 127.0.0.1:5300.
-%{ for zone in internal_zones ~}
-      forward-zones+=${zone}=127.0.0.1:5300
-%{ endfor ~}
+      forward-zones=${join(", ", [for z in internal_zones : "${z}=127.0.0.1:5300"])}
 
       quiet=yes
       log-common-errors=yes
       dnssec=process-no-validate
 
-  # ── Zone bootstrap (runs once) ───────────────────────────────────────────
-  # Creates empty zones in the SQLite backend. Terraform adds the actual
-  # records afterward via the pdns provider.
-  - path: /root/seed-zones.sh
+  # One-shot bootstrap script - runs after packages are installed. Handles
+  # everything that cloud-init's raw package install doesn't do for us.
+  - path: /root/bootstrap-nimbus-dns.sh
     owner: root:root
     permissions: '0700'
     content: |
       #!/bin/bash
       set -euo pipefail
 
-      # Wait for pdns_server to be up + reachable via pdnsutil.
-      until pdnsutil --config-dir=/etc/powerdns list-all-zones >/dev/null 2>&1; do
-        echo "Waiting for pdns_server..."; sleep 2
-      done
+      echo "== Step 1: disable systemd-resolved (owns :53 by default on Ubuntu 24.04)"
+      systemctl disable --now systemd-resolved || true
+      rm -f /etc/resolv.conf
+      echo "nameserver 127.0.0.1" > /etc/resolv.conf
 
+      echo "== Step 2: initialize the SQLite database (package does NOT do this)"
+      mkdir -p /var/lib/powerdns
+      if [ ! -s /var/lib/powerdns/pdns.sqlite3 ]; then
+        SCHEMA=$(find /usr/share -name "schema.sqlite3.sql" 2>/dev/null | head -1)
+        if [ -z "$SCHEMA" ]; then
+          echo "Schema file not found - reinstalling backend"
+          apt-get install --reinstall -y pdns-backend-sqlite3
+          SCHEMA=$(find /usr/share -name "schema.sqlite3.sql" 2>/dev/null | head -1)
+        fi
+        echo "Using schema: $SCHEMA"
+        sqlite3 /var/lib/powerdns/pdns.sqlite3 < "$SCHEMA"
+      fi
+      chown -R pdns:pdns /var/lib/powerdns
+
+      echo "== Step 3: start pdns (authoritative) and wait for it"
+      systemctl enable --now pdns
+      for i in $(seq 1 30); do
+        if systemctl is-active --quiet pdns; then break; fi
+        sleep 1
+      done
+      systemctl is-active --quiet pdns || { echo "pdns failed to start"; journalctl -u pdns -n 30; exit 1; }
+
+      echo "== Step 4: start pdns-recursor now that :53 is free"
+      systemctl enable --now pdns-recursor
+      for i in $(seq 1 15); do
+        if systemctl is-active --quiet pdns-recursor; then break; fi
+        sleep 1
+      done
+      systemctl is-active --quiet pdns-recursor || { echo "pdns-recursor failed"; journalctl -u pdns-recursor -n 30; exit 1; }
+
+      echo "== Step 5: seed zones (idempotent)"
+      VMIP=$(hostname -I | awk '{print $1}')
 %{ for zone in internal_zones ~}
-      if ! pdnsutil --config-dir=/etc/powerdns list-zone ${zone} >/dev/null 2>&1; then
+      if ! pdnsutil list-zone ${zone} >/dev/null 2>&1; then
         echo "Creating zone: ${zone}"
-        pdnsutil --config-dir=/etc/powerdns create-zone ${zone} ns1.${zone}.
-        pdnsutil --config-dir=/etc/powerdns add-record ${zone} ns1 A 300 $(hostname -I | awk '{print $1}')
+        pdnsutil create-zone ${zone} ns1.${zone}.
+        pdnsutil add-record ${zone} ns1 A 300 "$VMIP"
       else
-        echo "Zone ${zone} already exists, skipping."
+        echo "Zone ${zone} already exists"
       fi
 %{ endfor ~}
 
-      echo "Zone seed complete. Terraform can now manage records via the API."
+      echo "== Step 6: sanity checks"
+      pdnsutil list-all-zones
+      dig @127.0.0.1 -p 5300 ns1.${internal_zones[0]} +short
+
+      echo "nimbus-dns bootstrap complete"
 
 runcmd:
   - [ systemctl, enable, --now, qemu-guest-agent ]
   - [ systemctl, enable, --now, chrony ]
-  # PowerDNS ships disabled on Ubuntu — enable + start both daemons.
-  - [ systemctl, enable, --now, pdns ]
-  - [ systemctl, enable, --now, pdns-recursor ]
-  - [ bash, /root/seed-zones.sh ]
+  - [ bash, /root/bootstrap-nimbus-dns.sh ]
 
 final_message: "nimbus-dns ${hostname} ready after $UPTIME seconds"
