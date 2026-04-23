@@ -31,7 +31,6 @@ module "nimbus_dns" {
   internal_zones = ["nimbus.local", "nimbusnode.org"]
 
   api_allow_cidrs = var.mgmt_allow_cidrs
-
 }
 
 provider "powerdns" {
@@ -83,7 +82,7 @@ output "nimbus_dns_api_endpoint" {
 }
 
 output "nimbus_dns_api_key" {
-  description = "Auto-generated PowerDNS API key"
+  description = "PowerDNS HTTP API key (auto-generated)"
   value       = module.nimbus_dns.api_key
   sensitive   = true
 }

@@ -18,8 +18,9 @@ variable "ram" {
 }
 
 variable "disk" {
-  type    = number
-  default = 20
+  description = "Root disk size in GB. Must be >= golden template size (21.5G)."
+  type        = number
+  default     = 25
 }
 
 variable "data_disk" {
