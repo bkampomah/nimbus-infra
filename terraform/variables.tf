@@ -256,3 +256,9 @@ variable "nimbus_alb_ip" {
   type        = string
   default     = "10.0.1.10" # CHANGE_ME later when ALB is built
 }
+
+variable "mgmt_allow_cidrs" {
+  description = "CIDRs allowed to reach management APIs (e.g. PowerDNS API, future ALB admin UIs). Typically your home/office LAN plus the VPC itself."
+  type        = list(string)
+  default     = ["10.0.0.0/16", "192.168.0.0/16", "127.0.0.1/32"]
+}
