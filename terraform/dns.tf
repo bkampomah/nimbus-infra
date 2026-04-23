@@ -30,10 +30,8 @@ module "nimbus_dns" {
   upstream_dns   = ["1.1.1.1", "9.9.9.9"]
   internal_zones = ["nimbus.local", "nimbusnode.org"]
 
-  api_allow_cidrs = [
-    var.vpc_cidr,
-    "127.0.0.1/32",
-  ]
+  api_allow_cidrs = var.mgmt_allow_cidrs
+
 }
 
 provider "powerdns" {
