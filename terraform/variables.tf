@@ -123,7 +123,7 @@ variable "subnets" {
       cidr    = "10.0.100.0/24"
       gateway = "10.0.100.1"
       bridge  = "mgmt" # CHANGE_ME
-      public  = true    # mgmt is reachable from pfSense/bastion
+      public  = true   # mgmt is reachable from pfSense/bastion
     }
   }
 }
