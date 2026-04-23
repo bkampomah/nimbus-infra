@@ -19,7 +19,7 @@ variable "ram" {
 
 variable "disk" {
   type    = number
-  default = 20
+  default = 50
 }
 
 variable "admin_username" { type = string }

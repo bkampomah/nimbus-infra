@@ -104,25 +104,25 @@ variable "subnets" {
     public = {
       cidr    = "10.0.1.0/24"
       gateway = "10.0.1.1"
-      bridge  = "vmbr1" # CHANGE_ME to match the SDN VNet you created
+      bridge  = "public" # CHANGE_ME to match the SDN VNet you created
       public  = true
     }
     app = {
       cidr    = "10.0.10.0/24"
       gateway = "10.0.10.1"
-      bridge  = "vmbr2" # CHANGE_ME
+      bridge  = "app" # CHANGE_ME
       public  = false
     }
     data = {
       cidr    = "10.0.20.0/24"
       gateway = "10.0.20.1"
-      bridge  = "vmbr3" # CHANGE_ME
+      bridge  = "data" # CHANGE_ME
       public  = false
     }
     mgmt = {
       cidr    = "10.0.100.0/24"
       gateway = "10.0.100.1"
-      bridge  = "vmbr4" # CHANGE_ME
+      bridge  = "mgmt" # CHANGE_ME
       public  = true    # mgmt is reachable from pfSense/bastion
     }
   }

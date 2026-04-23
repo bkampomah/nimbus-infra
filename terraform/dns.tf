@@ -83,3 +83,9 @@ output "nimbus_dns_host" {
 output "nimbus_dns_api_endpoint" {
   value = module.nimbus_dns.api_endpoint
 }
+
+output "nimbus_dns_api_key" {
+  description = "Auto-generated PowerDNS API key"
+  value       = module.nimbus_dns.api_key
+  sensitive   = true
+}
