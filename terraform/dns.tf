@@ -57,7 +57,7 @@ resource "powerdns_record" "cloud_internal_cname" {
   name    = "cloud.nimbus.local."
   type    = "A"
   ttl     = 300
-  records = [var.nimbus_aio_ip]
+  records = [var.nimbus_alb_ip]
 }
 
 resource "powerdns_record" "nimbusnode_internal" {
