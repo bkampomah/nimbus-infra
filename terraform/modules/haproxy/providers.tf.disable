@@ -1,0 +1,13 @@
+# terraform/modules/haproxy/providers.tf
+#
+# Modules must declare which providers they use, by source.
+# Proxmox uses bpg/proxmox, not the nonexistent hashicorp/proxmox default.
+
+terraform {
+  required_providers {
+    proxmox = {
+      source  = "bpg/proxmox"
+      version = "~> 0.66"
+    }
+  }
+}
