@@ -1,15 +1,3 @@
-# terraform/modules/postgres/main.tf
-#
-# "nimbus-rds" — PostgreSQL 16 on Ubuntu, the RDS equivalent for Nimbus.
-#
-# Scope:
-#   - One VM, one PostgreSQL instance
-#   - Creates one initial database + role via cloud-init (for Nextcloud)
-#   - Listens only on the data-tier subnet (enforced by pg_hba.conf + SG)
-#
-# Real RDS does far more (automated backups, PITR, multi-AZ). Layer those
-# on later — pgbackrest → MinIO for backups is the natural next step.
-
 terraform {
   required_providers {
     proxmox = {
@@ -19,6 +7,9 @@ terraform {
   }
 }
 
+# terraform/modules/postgres/main.tf
+#
+# nimbus-rds - a Postgres-based DB.
 resource "proxmox_virtual_environment_file" "user_data" {
   content_type = "snippets"
   datastore_id = var.iso_storage
@@ -27,23 +18,30 @@ resource "proxmox_virtual_environment_file" "user_data" {
   source_raw {
     file_name = "${var.name}-user-data.yaml"
     data = templatefile("${path.module}/user-data.yml.tftpl", {
-      hostname        = var.name
-      admin_username  = var.admin_username
-      admin_password  = var.admin_password
-      admin_ssh_keys  = var.admin_ssh_keys
-      initial_db_name = var.initial_db_name
-      initial_db_user = var.initial_db_user
-      initial_db_pw   = var.initial_db_password
-      allowed_cidr    = var.allowed_cidr
+      hostname         = var.name
+      search_domain     = var.search_domain
+      admin_ssh_keys    = var.admin_ssh_keys
+      admin_username   = var.admin_username
+      admin_password   = var.admin_password
+      postgres_db       = var.postgres_db
+      postgres_user     = var.postgres_user
+      postgres_password = var.postgres_password
+      allowed_cidr      = var.allowed_cidr
+      wsl_cidr          = var.wsl_cidr
+      mgmt_cidr         = var.mgmt_cidr
+      dns_server        = var.dns_server
     })
   }
 }
 
-resource "proxmox_virtual_environment_vm" "rds" {
+# -----------------------------------------------------------------------------
+# The VM itself — cloned from the golden Ubuntu 24.04 template.
+# -----------------------------------------------------------------------------
+resource "proxmox_virtual_environment_vm" "postgres" {
   name        = var.name
   node_name   = var.proxmox_node
-  description = "Managed by Terraform — PostgreSQL (nimbus-rds)"
-  tags        = ["postgres", "data-tier", "rds"]
+  description = "PostgreSQL 16 — RDS-equivalent for nimbus-data subnet. Managed by Terraform."
+  tags        = ["terraform", "postgres", "rds", "nimbus-data"]
 
   clone {
     vm_id = var.template_vm_id
@@ -72,25 +70,19 @@ resource "proxmox_virtual_environment_vm" "rds" {
   }
 
   initialization {
-    datastore_id      = var.vm_storage
-    user_data_file_id = proxmox_virtual_environment_file.user_data.id
+    datastore_id = var.vm_storage
 
     ip_config {
       ipv4 {
-        address = "dhcp"
+        address = "${var.ip_address}/${var.subnet_prefix}"
+        gateway = var.gateway
       }
     }
+
+    user_data_file_id = proxmox_virtual_environment_file.user_data.id
   }
 
   operating_system {
     type = "l26"
-  }
-
-  agent {
-    enabled = true
-  }
-
-  lifecycle {
-    ignore_changes = [initialization[0].user_account]
   }
 }

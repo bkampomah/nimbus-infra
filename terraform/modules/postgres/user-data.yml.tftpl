@@ -1,98 +1,101 @@
 #cloud-config
-# ---------------------------------------------------------------------------
-# cloud-init for nimbus-rds (PostgreSQL 16 on Ubuntu 24.04)
-# Creates one initial database + role (for Nextcloud), binds Postgres to all
-# interfaces, and writes a pg_hba.conf that only allows traffic from the
-# app-tier CIDR.
-# ---------------------------------------------------------------------------
-
 hostname: ${hostname}
+fqdn: ${hostname}.${search_domain}
 manage_etc_hosts: true
 preserve_hostname: false
 
 users:
-  - name: ${admin_username}
-    groups: [sudo, adm]
+  - name: ansible
+    sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
-    sudo: ['ALL=(ALL) NOPASSWD:ALL']
-    lock_passwd: false
+    groups: [sudo]
     ssh_authorized_keys:
-%{ for key in admin_ssh_keys ~}
-      - ${key}
-%{ endfor ~}
-
-chpasswd:
-  expire: false
-  list: |
-    ${admin_username}:${admin_password}
-
-ssh_pwauth: true
+      - ${ssh_pubkey}
 
 package_update: true
-package_upgrade: true
+package_upgrade: false
 
 packages:
-  - qemu-guest-agent
   - postgresql-16
-  - postgresql-contrib-16
-  - chrony
-  - unattended-upgrades
+  - postgresql-client-16
+  - ufw
+  - qemu-guest-agent
 
+# NOTE: We deliberately do NOT write postgres config files directly to
+# /etc/postgresql/16/main/ via write_files. write_files runs BEFORE packages:
+# install, and pg_createcluster wipes that directory when postgresql-16 is
+# installed. Anything dropped in there gets nuked. So we stage configs in
+# /root/staging/ and copy them into place in runcmd (which runs AFTER package
+# install).
 write_files:
-  # Listen on all interfaces (Proxmox firewall + pg_hba do the filtering)
-  - path: /etc/postgresql/16/main/conf.d/10-nimbus-listen.conf
-    owner: postgres:postgres
+  # --- Staged: Postgres tuning override (copied into conf.d/ in runcmd) --
+  - path: /root/staging/10-nimbus.conf
+    owner: root:root
     permissions: '0644'
     content: |
+      # Managed by cloud-init — do not edit by hand
       listen_addresses = '*'
+      port = 5432
+      max_connections = 100
+      shared_buffers = 256MB
+      password_encryption = 'scram-sha-256'
 
-  # Only allow the app subnet to connect, using scram-sha-256 passwords
-  - path: /etc/postgresql/16/main/conf.d/10-nimbus-hba.sh
+  # --- Staged: pg_hba.conf (copied into place in runcmd) -----------------
+  - path: /root/staging/pg_hba.conf
     owner: root:root
-    permissions: '0700'
+    permissions: '0640'
     content: |
-      #!/bin/bash
-      set -e
-      HBA=/etc/postgresql/16/main/pg_hba.conf
-      grep -q "nimbus-rds-managed" "$HBA" || cat >> "$HBA" <<EOF
+      # Managed by cloud-init — do not edit by hand
+      # TYPE  DATABASE        USER            ADDRESS                 METHOD
+      local   all             postgres                                peer
+      local   all             all                                     peer
+      host    all             all             127.0.0.1/32            scram-sha-256
+      host    all             all             ::1/128                 scram-sha-256
+      # App subnet — only ${postgres_user} to ${postgres_db}
+      host    ${postgres_db}  ${postgres_user} ${allowed_cidr}        scram-sha-256
 
-      # nimbus-rds-managed (do not edit above line, it's the marker)
-      host    all    all    ${allowed_cidr}    scram-sha-256
-      EOF
-
-  - path: /root/init-nimbus-rds.sh
+  # --- One-shot bootstrap SQL (shredded after use) -----------------------
+  - path: /root/bootstrap-db.sql
     owner: root:root
-    permissions: '0700'
+    permissions: '0600'
     content: |
-      #!/bin/bash
-      set -euo pipefail
-
-      bash /etc/postgresql/16/main/conf.d/10-nimbus-hba.sh
-      systemctl restart postgresql
-
-      # Create role + DB if they don't exist (idempotent).
-      sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
-      DO \$\$
-      BEGIN
-        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${initial_db_user}') THEN
-          CREATE ROLE ${initial_db_user} LOGIN PASSWORD '${initial_db_pw}';
-        ELSE
-          ALTER ROLE ${initial_db_user} WITH PASSWORD '${initial_db_pw}';
-        END IF;
-      END
-      \$\$;
-      SQL
-
-      if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${initial_db_name}'" | grep -q 1; then
-        sudo -u postgres createdb -O ${initial_db_user} ${initial_db_name}
-      fi
-
-      echo "nimbus-rds bootstrap complete."
+      CREATE USER ${postgres_user} WITH ENCRYPTED PASSWORD '${postgres_password}';
+      CREATE DATABASE ${postgres_db} OWNER ${postgres_user};
+      GRANT ALL PRIVILEGES ON DATABASE ${postgres_db} TO ${postgres_user};
+      \c ${postgres_db}
+      GRANT ALL ON SCHEMA public TO ${postgres_user};
 
 runcmd:
-  - [ systemctl, enable, --now, qemu-guest-agent ]
-  - [ systemctl, enable, --now, chrony ]
-  - [ systemctl, enable, --now, postgresql ]
-  - [ bash, /root/init-nimbus-rds.sh ]
+  # --- Guest agent so Proxmox sees the IP --------------------------------
+  - systemctl enable --now qemu-guest-agent
 
-final_message: "nimbus-rds ${hostname} ready after $UPTIME seconds"
+  # --- DNS via systemd-resolved ------------------------------------------
+  - sed -i 's/^#*DNS=.*/DNS=${dns_server}/' /etc/systemd/resolved.conf
+  - sed -i 's/^#*Domains=.*/Domains=${search_domain}/' /etc/systemd/resolved.conf
+  - systemctl restart systemd-resolved
+
+  # --- UFW: default deny, mgmt SSH, app-subnet postgres ------------------
+  - ufw --force reset
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow from ${mgmt_cidr} to any port 22 proto tcp comment 'SSH from mgmt'
+  - ufw allow from ${allowed_cidr} to any port 5432 proto tcp comment 'Postgres from app subnet'
+  - ufw --force enable
+
+  # --- Install our postgres configs (NOW that the package is installed) --
+  - install -o postgres -g postgres -m 0644 /root/staging/10-nimbus.conf /etc/postgresql/16/main/conf.d/10-nimbus.conf
+  - install -o postgres -g postgres -m 0640 /root/staging/pg_hba.conf /etc/postgresql/16/main/pg_hba.conf
+  - rm -rf /root/staging
+
+  # --- Bootstrap the database --------------------------------------------
+  - systemctl restart postgresql
+  - sudo -u postgres psql -f /root/bootstrap-db.sql
+  - shred -u /root/bootstrap-db.sql
+
+  # --- Final restart so all config is live -------------------------------
+  - systemctl restart postgresql
+
+  # --- Scrub the cloud-init output log (contains the password) -----------
+  - truncate -s 0 /var/log/cloud-init-output.log || true
+
+final_message: "nimbus-rds bootstrap complete in $UPTIME seconds."
