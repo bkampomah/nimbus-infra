@@ -39,13 +39,13 @@ variable "proxmox_node" {
 variable "proxmox_vm_storage" {
   description = "Storage pool for VM disks (ZFS / Ceph / LVM-thin). Check `pvesm status`."
   type        = string
-  default     = "local-lvm" # CHANGE_ME if you use ZFS/Ceph — typical values: "local-zfs", "ceph-rbd"
+  default     = "nvme-lvm" # CHANGE_ME if you use ZFS/Ceph — typical values: "local-zfs", "ceph-rbd"
 }
 
 variable "proxmox_iso_storage" {
   description = "Storage pool that holds ISOs / cloud images / snippets"
   type        = string
-  default     = "local"
+  default     = "sata-backups"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ variable "company_name" {
 variable "admin_username" {
   description = "Default Linux user created by cloud-init on every VM"
   type        = string
-  default     = "Nimbus"
+  default     = "nimbus"
 }
 
 variable "admin_password" {
@@ -166,6 +166,31 @@ variable "cloudflare_tunnel_token" {
   sensitive   = true
   default     = ""
   # CHANGE_ME in terraform.tfvars
+}
+
+variable "nimbus_s3_ip" {
+  description = "Current IP of your s3 VM on the nimbus-data subnet"
+  type        = string
+  default     = "10.0.20.101"
+}
+
+variable "nimbus_s3_root_disk_size_gb" {
+  description = "Root disk size in GB for nimbus-s3"
+  type        = number
+  default     = 32
+}
+
+
+variable "nimbus_s3_data_disk_size_gb" {
+  description = "MinIO data disk size in GB for nimbus-s3"
+  type        = number
+  default     = 200
+}
+
+variable "nimbus_rds_ip" {
+  description = "Static IP for nimbus-rds in the data subnet"
+  type        = string
+  default     = "10.0.20.100"
 }
 
 variable "cloudflare_ip_ranges" {
