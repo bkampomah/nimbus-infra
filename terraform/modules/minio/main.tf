@@ -1,16 +1,3 @@
-# terraform/modules/minio/main.tf
-#
-# "nimbus-s3" — MinIO single-node, the S3 equivalent for Nimbus.
-#
-# Scope:
-#   - One VM running MinIO via systemd
-#   - Root credentials seeded from vars
-#   - On first boot: creates a bucket + a dedicated access key pair for
-#     Nextcloud, matching IAM-user-scoped-to-one-bucket on AWS
-#
-# For a "multi-AZ-ish" setup later: switch to 4 MinIO VMs with MNMD mode
-# across two Proxmox nodes. Same module, just fan it out.
-
 terraform {
   required_providers {
     proxmox = {
@@ -20,62 +7,75 @@ terraform {
   }
 }
 
+# -----------------------------------------------------------------------------
+# Cloud-init user-data snippet
+# -----------------------------------------------------------------------------
 resource "proxmox_virtual_environment_file" "user_data" {
   content_type = "snippets"
   datastore_id = var.iso_storage
   node_name    = var.proxmox_node
 
   source_raw {
-    file_name = "${var.name}-user-data.yaml"
     data = templatefile("${path.module}/user-data.yml.tftpl", {
-      hostname             = var.name
-      admin_username       = var.admin_username
-      admin_password       = var.admin_password
-      admin_ssh_keys       = var.admin_ssh_keys
-      minio_root_user      = var.minio_root_user
-      minio_root_password  = var.minio_root_password
-      nextcloud_bucket     = var.nextcloud_bucket
-      nextcloud_access_key = var.nextcloud_access_key
-      nextcloud_secret_key = var.nextcloud_secret_key
+      hostname            = var.name
+      admin_username      = var.admin_username
+      admin_password      = var.admin_password
+      admin_ssh_keys      = var.admin_ssh_keys
+      minio_root_user     = var.minio_root_user
+      minio_root_password = var.minio_root_password
+      minio_bucket        = var.minio_bucket
+      pgbackup_access_key = var.pgbackup_access_key
+      pgbackup_secret_key = var.pgbackup_secret_key
+      api_allow_cidrs     = var.api_allow_cidrs
+      console_allow_cidrs = var.console_allow_cidrs
+      mgmt_allow_cidrs    = var.mgmt_allow_cidrs
     })
+    file_name = "${var.name}-user-data.yml"
   }
 }
 
+# -----------------------------------------------------------------------------
+# The VM — cloned from golden Ubuntu template, with separate data disk
+# -----------------------------------------------------------------------------
 resource "proxmox_virtual_environment_vm" "minio" {
   name        = var.name
+  description = "MinIO single-node — S3-equivalent for nimbus-data subnet. Managed by Terraform."
+  tags        = ["terraform", "minio", "s3", "nimbus-data"]
   node_name   = var.proxmox_node
-  description = "Managed by Terraform — MinIO (nimbus-s3)"
-  tags        = ["minio", "s3", "data-tier"]
+  vm_id       = var.vm_id
 
   clone {
     vm_id = var.template_vm_id
     full  = true
   }
 
+  agent {
+    enabled = true
+  }
+
   cpu {
-    cores = var.cpu
+    cores = var.cpu_cores
     type  = "host"
   }
 
   memory {
-    dedicated = var.ram
+    dedicated = var.memory_mb
   }
 
-  # Boot/OS disk
+  # Root disk (OS, MinIO binary)
   disk {
     datastore_id = var.vm_storage
     interface    = "scsi0"
-    size         = var.disk
-    file_format  = "raw"
+    size         = var.root_disk_size_gb
   }
 
-  # Data disk (kept separate so you can grow it / back it up independently,
-  # the way you'd attach a dedicated EBS volume for S3-like storage in AWS).
+  # Data disk (object storage) — formatted xfs, mounted at /mnt/minio in cloud-init
   disk {
     datastore_id = var.vm_storage
     interface    = "scsi1"
-    size         = var.data_disk
+    size         = var.data_disk_size_gb
     file_format  = "raw"
+    iothread     = true
   }
 
   network_device {
@@ -84,25 +84,19 @@ resource "proxmox_virtual_environment_vm" "minio" {
   }
 
   initialization {
-    datastore_id      = var.vm_storage
-    user_data_file_id = proxmox_virtual_environment_file.user_data.id
+    datastore_id = var.vm_storage
 
     ip_config {
       ipv4 {
-        address = "dhcp"
+        address = var.static_ip
+        gateway = var.gateway
       }
     }
+
+    user_data_file_id = proxmox_virtual_environment_file.user_data.id
   }
 
   operating_system {
     type = "l26"
-  }
-
-  agent {
-    enabled = true
-  }
-
-  lifecycle {
-    ignore_changes = [initialization[0].user_account]
   }
 }

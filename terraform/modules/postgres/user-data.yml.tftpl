@@ -2,8 +2,13 @@
 # ---------------------------------------------------------------------------
 # cloud-init for nimbus-rds (PostgreSQL 16 on Ubuntu 24.04)
 # Creates one initial database + role (for Nextcloud), binds Postgres to all
-# interfaces, and writes a pg_hba.conf that only allows traffic from the
-# app-tier CIDR.
+# interfaces, writes pg_hba.conf to allow only the app-tier CIDR, and installs
+# the pg-backup pipeline (local dump + push to MinIO).
+#
+# IMPORTANT — Terraform templatefile() escaping:
+#   - Source $${VAR} renders as a literal shell-style placeholder for cloud-init / bash
+#   - Terraform variables are written like ${hostname}, ${admin_username}, etc.
+#   - Do not put unescaped placeholder examples in this file unless they exist in templatefile()
 # ---------------------------------------------------------------------------
 
 hostname: ${hostname}
@@ -37,6 +42,8 @@ packages:
   - postgresql-contrib-16
   - chrony
   - unattended-upgrades
+  - curl
+  - ca-certificates
 
 write_files:
   # Listen on all interfaces (Proxmox firewall + pg_hba do the filtering)
@@ -46,20 +53,23 @@ write_files:
     content: |
       listen_addresses = '*'
 
-  # Only allow the app subnet to connect, using scram-sha-256 passwords
-  - path: /etc/postgresql/16/main/conf.d/10-nimbus-hba.sh
+  # pg_hba helper — moved out of conf.d/ where it didn't belong.
+  # Idempotent: appends to pg_hba.conf only if marker line is missing.
+  - path: /usr/local/sbin/nimbus-pg-hba-init.sh
     owner: root:root
     permissions: '0700'
     content: |
       #!/bin/bash
       set -e
       HBA=/etc/postgresql/16/main/pg_hba.conf
-      grep -q "nimbus-rds-managed" "$HBA" || cat >> "$HBA" <<EOF
+      grep -q "nimbus-rds-managed" "$${HBA}" || cat >> "$${HBA}" <<EOF
 
       # nimbus-rds-managed (do not edit above line, it's the marker)
       host    all    all    ${allowed_cidr}    scram-sha-256
       EOF
 
+  # One-shot bootstrap script — runs from runcmd, exits non-zero on any failure
+  # so silent failures stop being silent (lesson from 5b's first deploy).
   - path: /root/init-nimbus-rds.sh
     owner: root:root
     permissions: '0700'
@@ -67,12 +77,13 @@ write_files:
       #!/bin/bash
       set -euo pipefail
 
-      bash /etc/postgresql/16/main/conf.d/10-nimbus-hba.sh
+      bash /usr/local/sbin/nimbus-pg-hba-init.sh
       systemctl restart postgresql
 
       # Create role + DB if they don't exist (idempotent).
+      # NB: $$$$ in source -> $$ after templatefile() -> postgres DO block sees $$
       sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
-      DO \$\$
+      DO $pg$
       BEGIN
         IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${initial_db_user}') THEN
           CREATE ROLE ${initial_db_user} LOGIN PASSWORD '${initial_db_pw}';
@@ -80,19 +91,133 @@ write_files:
           ALTER ROLE ${initial_db_user} WITH PASSWORD '${initial_db_pw}';
         END IF;
       END
-      \$\$;
+      $pg$;
       SQL
 
       if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${initial_db_name}'" | grep -q 1; then
         sudo -u postgres createdb -O ${initial_db_user} ${initial_db_name}
       fi
 
-      echo "nimbus-rds bootstrap complete."
+      echo "nimbus-rds db bootstrap complete."
+
+  # ------------------------------------------------------------------------
+  # Backup pipeline: pg_dumpall -> /var/backups/postgres -> MinIO push
+  # NB: shell variables here use $${NAME} so templatefile() doesn't expand them.
+  # ------------------------------------------------------------------------
+
+  # The backup script. Uses /usr/local/bin/mc.minio (NOT mc — collides with
+  # GNU Midnight Commander on the golden template).
+  - path: /usr/local/bin/pg-backup.sh
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      BACKUP_DIR=/var/backups/postgres
+      RETENTION_DAYS=7
+      TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+      HOSTNAME=$(hostname -s)
+      DUMP_FILE="$${BACKUP_DIR}/pgdumpall-$${TIMESTAMP}.sql.gz"
+
+      MC=/usr/local/bin/mc.minio
+      S3_ALIAS=s3
+      S3_BUCKET=${s3_bucket}
+      S3_PREFIX=$${HOSTNAME}
+
+      # Step 1: local dump
+      mkdir -p "$${BACKUP_DIR}"
+      chown postgres:postgres "$${BACKUP_DIR}"
+      chmod 700 "$${BACKUP_DIR}"
+
+      sudo -u postgres pg_dumpall | gzip > "$${DUMP_FILE}"
+      chmod 600 "$${DUMP_FILE}"
+
+      if [ ! -s "$${DUMP_FILE}" ]; then
+        logger -p user.err "pg-backup: FAILED — local dump empty or missing"
+        exit 1
+      fi
+
+      LOCAL_SIZE=$(du -h "$${DUMP_FILE}" | cut -f1)
+      logger "pg-backup: local dump ok $${DUMP_FILE} ($${LOCAL_SIZE})"
+
+      # Step 2: push to MinIO (don't fail the whole job if push fails)
+      if [ -x "$${MC}" ] && "$${MC}" --no-color alias list "$${S3_ALIAS}" >/dev/null 2>&1; then
+        TARGET="$${S3_ALIAS}/$${S3_BUCKET}/$${S3_PREFIX}/$(basename "$${DUMP_FILE}")"
+        if "$${MC}" --no-color cp "$${DUMP_FILE}" "$${TARGET}" >/dev/null 2>&1; then
+          logger "pg-backup: pushed to $${TARGET}"
+        else
+          logger -p user.warning "pg-backup: WARNING — failed to push to $${TARGET}"
+        fi
+      else
+        logger -p user.warning "pg-backup: WARNING — mc.minio not configured at $${MC}"
+      fi
+
+      # Step 3: rotate local copies
+      find "$${BACKUP_DIR}" -name "pgdumpall-*.sql.gz" -mtime "+$${RETENTION_DAYS}" -delete
+
+  # systemd service unit
+  - path: /etc/systemd/system/pg-backup.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=PostgreSQL daily backup
+      Documentation=https://www.postgresql.org/docs/16/backup-dump.html
+      After=postgresql.service network-online.target
+      Requires=postgresql.service
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/pg-backup.sh
+      StandardOutput=journal
+      StandardError=journal
+
+      # Hardening — note /root/.mc.minio is where mc.minio stores its config
+      # (auto-derived from binary name, not the upstream /root/.mc/ path)
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ReadWritePaths=/var/backups/postgres /root/.mc.minio
+      PrivateTmp=true
+
+  # systemd timer
+  - path: /etc/systemd/system/pg-backup.timer
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Daily PostgreSQL backup timer
+
+      [Timer]
+      OnCalendar=*-*-* 02:30:00
+      RandomizedDelaySec=15min
+      Persistent=true
+      Unit=pg-backup.service
+
+      [Install]
+      WantedBy=timers.target
 
 runcmd:
   - [ systemctl, enable, --now, qemu-guest-agent ]
   - [ systemctl, enable, --now, chrony ]
   - [ systemctl, enable, --now, postgresql ]
+
+  # DB bootstrap (creates role + DB)
   - [ bash, /root/init-nimbus-rds.sh ]
 
-final_message: "nimbus-rds ${hostname} ready after $UPTIME seconds"
+  # MinIO client install — named mc.minio to avoid /usr/bin/mc (Midnight Commander) collision
+  - curl -sSfLo /usr/local/bin/mc.minio https://dl.min.io/client/mc/release/linux-amd64/mc
+  - chmod +x /usr/local/bin/mc.minio
+
+  # Configure the s3 alias for root (HOME=/root forces config under /root/.mc.minio/)
+  - sudo HOME=/root /usr/local/bin/mc.minio --no-color alias set s3 ${s3_endpoint} ${s3_access_key} ${s3_secret_key}
+
+  # Pre-create backup dir before systemd timer fires (lesson from 5a)
+  - install -d -o postgres -g postgres -m 0700 /var/backups/postgres
+
+  # Enable + start the daily timer
+  - systemctl daemon-reload
+  - systemctl enable --now pg-backup.timer
+
+final_message: "nimbus-rds ${hostname} ready after $${UPTIME} seconds (DB + backup pipeline)"

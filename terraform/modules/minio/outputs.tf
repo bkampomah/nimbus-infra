@@ -1,33 +1,46 @@
-# terraform/modules/minio/outputs.tf
+output "vm_id" {
+  description = "Proxmox VMID"
+  value       = proxmox_virtual_environment_vm.minio.vm_id
+}
 
-output "vm_name" {
-  value = proxmox_virtual_environment_vm.minio.name
+output "name" {
+  description = "VM hostname"
+  value       = proxmox_virtual_environment_vm.minio.name
 }
 
 output "host" {
-  value = try(proxmox_virtual_environment_vm.minio.ipv4_addresses[1][0], "pending-guest-agent")
+  description = "Static IP without CIDR suffix"
+  value       = split("/", var.static_ip)[0]
 }
 
-output "endpoint" {
-  description = "S3 endpoint URL for Nextcloud and other clients"
-  value       = "http://${try(proxmox_virtual_environment_vm.minio.ipv4_addresses[1][0], "pending")}:9000"
+output "api_endpoint" {
+  description = "S3 API endpoint URL"
+  value       = "http://${split("/", var.static_ip)[0]}:9000"
 }
 
-output "console_url" {
-  description = "MinIO admin UI"
-  value       = "http://${try(proxmox_virtual_environment_vm.minio.ipv4_addresses[1][0], "pending")}:9001"
+output "console_endpoint" {
+  description = "Web admin console URL"
+  value       = "http://${split("/", var.static_ip)[0]}:9001"
 }
 
-output "nextcloud_bucket" {
-  value = var.nextcloud_bucket
+output "minio_root_user" {
+  description = "MinIO root admin username"
+  value       = var.minio_root_user
 }
 
-output "nextcloud_access_key" {
-  value     = var.nextcloud_access_key
-  sensitive = true
+output "default_bucket" {
+  description = "Initial bucket name"
+  value       = var.minio_bucket
 }
 
-output "nextcloud_secret_key" {
-  value     = var.nextcloud_secret_key
-  sensitive = true
+output "pgbackup_access_key" {
+  description = "Service account key for the pg-backup writer"
+  value       = var.pgbackup_access_key
+}
+
+# Added in 5b.1 — postgres module reads this to wire the backup push
+output "pgbackup_secret_key" {
+  description = "Service account secret for the pg-backup writer (sensitive)"
+  value       = var.pgbackup_secret_key
+  sensitive   = true
 }
