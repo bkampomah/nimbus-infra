@@ -260,9 +260,10 @@ write_files:
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments region --value='us-east-1'
 
       # ── Cron (the "correct" background job backend per Nextcloud docs) ────
-      crontab -u www-data - <<EOF
-*/5 * * * * php -f $NC_WEBROOT/cron.php
-EOF
+      # One-liner avoids a heredoc whose EOF terminator would have to sit at
+      # column 0, which terminates the YAML block scalar early and causes
+      # cloud-init to discard the entire user-data file.
+      echo "*/5 * * * * php -f $NC_WEBROOT/cron.php" | crontab -u www-data -
       sudo -u www-data php "$NC_WEBROOT/occ" background:cron
 
       # ── nginx + PHP-FPM ────────────────────────────────────────────────────
