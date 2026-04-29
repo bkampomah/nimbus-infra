@@ -46,7 +46,7 @@ resource "powerdns_record" "cloud_app" {
   name    = "cloud-app.nimbus.local."
   type    = "A"
   ttl     = 300
-  records = [var.nimbus_cloud_ip]
+  records = [var.nimbus_alb_ip]
 }
 
 output "nimbus_nextcloud_host" {

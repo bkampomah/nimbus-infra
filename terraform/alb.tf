@@ -1,10 +1,10 @@
 # terraform/alb.tf
 #
 # nimbus-alb - HAProxy-based Application Load Balancer for Nimbus.
-# Lives in the public subnet; fronts services running in the app subnet
-# (starting with the existing Nextcloud AIO at 10.0.10.101:11000).
+# Lives in the public subnet; fronts services running in the app subnet.
 #
-# Phase 4b deliverable.
+# Phase 4b: initial ALB + AIO backend.
+# Phase 5d: add nimbus-cloud-01 backend (cloud-app.nimbus.local).
 
 module "nimbus_alb" {
   source = "./modules/haproxy"
@@ -23,14 +23,20 @@ module "nimbus_alb" {
   static_ip = "${var.nimbus_alb_ip}/24"
   gateway   = var.subnets.public.gateway
 
-  # Host-based routing: one backend for now. Add more entries here as
-  # new app-tier services come online (e.g. nimbus-web-01/02 in Phase 6).
   backends = [
     {
       name        = "nextcloud-aio"
       host_match  = "cloud.nimbus.local"
       server_ip   = var.nimbus_aio_ip
       server_port = 11000
+      check       = true
+    },
+    # Phase 5d: nimbus-cloud-01 (app-tier Nextcloud, port 80 via nginx)
+    {
+      name        = "nextcloud-cloud"
+      host_match  = "cloud-app.nimbus.local"
+      server_ip   = var.nimbus_cloud_ip
+      server_port = 80
       check       = true
     }
   ]
