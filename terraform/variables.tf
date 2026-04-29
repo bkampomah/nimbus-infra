@@ -193,6 +193,12 @@ variable "nimbus_rds_ip" {
   default     = "10.0.20.100"
 }
 
+variable "nimbus_cloud_ip" {
+  description = "Static IP for nimbus-cloud-01 in the app subnet"
+  type        = string
+  default     = "10.0.10.102"
+}
+
 variable "cloudflare_ip_ranges" {
   description = <<-EOT
     CIDRs Nextcloud should trust as reverse proxies in addition to the ALB.
@@ -226,24 +232,10 @@ variable "nextcloud_admin_password" {
   # CHANGE_ME in terraform.tfvars
 }
 
-variable "nextcloud_db_password" {
-  description = "Password for the PostgreSQL 'nextcloud' role"
-  type        = string
-  sensitive   = true
-  # CHANGE_ME in terraform.tfvars
-}
-
 variable "minio_root_user" {
   description = "MinIO root (admin) username"
   type        = string
   default     = "nimbus-admin"
-}
-
-variable "minio_root_password" {
-  description = "MinIO root password (min 8 chars)"
-  type        = string
-  sensitive   = true
-  # CHANGE_ME in terraform.tfvars
 }
 
 variable "nextcloud_s3_access_key" {
@@ -286,4 +278,23 @@ variable "mgmt_allow_cidrs" {
   description = "CIDRs allowed to reach management APIs (e.g. PowerDNS API, future ALB admin UIs). Typically your home/office LAN plus the VPC itself."
   type        = list(string)
   default     = ["10.0.0.0/16", "192.168.0.0/16", "127.0.0.1/32"]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PowerDNS provider (two-stage bootstrap)
+# Stage 1: terraform apply -target=module.nimbus_dns
+# Stage 2: terraform output -raw nimbus_dns_api_key → set powerdns_api_key here
+# Stage 3: terraform apply
+# ─────────────────────────────────────────────────────────────────────────────
+
+variable "powerdns_api_key" {
+  description = <<-EOT
+    PowerDNS HTTP API key. Leave empty on the first apply (Stage 1).
+    After the DNS VM is up, run:
+      terraform output -raw nimbus_dns_api_key
+    then set this variable in terraform.tfvars and run terraform apply again.
+  EOT
+  type        = string
+  sensitive   = true
+  default     = ""
 }

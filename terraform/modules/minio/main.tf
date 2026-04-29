@@ -17,18 +17,20 @@ resource "proxmox_virtual_environment_file" "user_data" {
 
   source_raw {
     data = templatefile("${path.module}/user-data.yml.tftpl", {
-      hostname            = var.name
-      admin_username      = var.admin_username
-      admin_password      = var.admin_password
-      admin_ssh_keys      = var.admin_ssh_keys
-      minio_root_user     = var.minio_root_user
-      minio_root_password = var.minio_root_password
-      minio_bucket        = var.minio_bucket
-      pgbackup_access_key = var.pgbackup_access_key
-      pgbackup_secret_key = var.pgbackup_secret_key
-      api_allow_cidrs     = var.api_allow_cidrs
-      console_allow_cidrs = var.console_allow_cidrs
-      mgmt_allow_cidrs    = var.mgmt_allow_cidrs
+      hostname             = var.name
+      admin_username       = var.admin_username
+      admin_password       = var.admin_password
+      admin_ssh_keys       = var.admin_ssh_keys
+      minio_root_user      = var.minio_root_user
+      minio_root_password  = var.minio_root_password
+      minio_bucket         = var.minio_bucket
+      pgbackup_access_key  = var.pgbackup_access_key
+      pgbackup_secret_key  = var.pgbackup_secret_key
+      nextcloud_access_key = var.nextcloud_access_key
+      nextcloud_secret_key = var.nextcloud_secret_key
+      api_allow_cidrs      = var.api_allow_cidrs
+      console_allow_cidrs  = var.console_allow_cidrs
+      mgmt_allow_cidrs     = var.mgmt_allow_cidrs
     })
     file_name = "${var.name}-user-data.yml"
   }
@@ -67,6 +69,7 @@ resource "proxmox_virtual_environment_vm" "minio" {
     datastore_id = var.vm_storage
     interface    = "scsi0"
     size         = var.root_disk_size_gb
+    file_format  = "raw"
   }
 
   # Data disk (object storage) — formatted xfs, mounted at /mnt/minio in cloud-init

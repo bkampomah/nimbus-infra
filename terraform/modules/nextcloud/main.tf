@@ -29,7 +29,11 @@
 #     admin_ssh_keys      = var.admin_ssh_public_keys
 #     nextcloud_admin_pw  = var.nextcloud_admin_password
 #     nextcloud_domain    = "cloud.nimbus.local"
+#     static_ip           = "${var.nimbus_cloud_ip}/24"
+#     gateway             = var.subnets.app.gateway
 #     trusted_proxies     = [var.subnets.public.cidr]
+#     alb_allow_cidrs     = [var.subnets.public.cidr]
+#     mgmt_allow_cidrs    = var.mgmt_allow_cidrs
 #     db_host             = module.postgres.host
 #     db_name             = "nextcloud"
 #     db_user             = "nextcloud"
@@ -64,6 +68,8 @@ resource "proxmox_virtual_environment_file" "user_data" {
       nextcloud_admin_pw = var.nextcloud_admin_pw
       nextcloud_domain   = var.nextcloud_domain
       trusted_proxies    = var.trusted_proxies
+      alb_allow_cidrs    = var.alb_allow_cidrs
+      mgmt_allow_cidrs   = var.mgmt_allow_cidrs
       db_host            = var.db_host
       db_name            = var.db_name
       db_user            = var.db_user
@@ -114,7 +120,8 @@ resource "proxmox_virtual_environment_vm" "nextcloud" {
 
     ip_config {
       ipv4 {
-        address = "dhcp"
+        address = var.static_ip
+        gateway = var.gateway
       }
     }
   }

@@ -5,11 +5,11 @@ output "vm_name" {
 }
 
 output "ipv4_address" {
-  description = "Primary IPv4 once qemu-guest-agent reports in"
-  value       = try(proxmox_virtual_environment_vm.nextcloud.ipv4_addresses[1][0], "pending-guest-agent")
+  description = "Static app-subnet IPv4"
+  value       = split("/", var.static_ip)[0]
 }
 
 output "backend_target" {
   description = "host:port for HAProxy/Traefik to point at"
-  value       = "${try(proxmox_virtual_environment_vm.nextcloud.ipv4_addresses[1][0], "pending-guest-agent")}:80"
+  value       = "${split("/", var.static_ip)[0]}:80"
 }

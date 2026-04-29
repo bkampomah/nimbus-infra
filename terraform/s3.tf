@@ -43,11 +43,13 @@ module "nimbus_s3" {
   root_disk_size_gb = var.nimbus_s3_root_disk_size_gb
   data_disk_size_gb = var.nimbus_s3_data_disk_size_gb
 
-  minio_root_user     = "nimbusadmin"
-  minio_root_password = random_password.minio_root.result
-  minio_bucket        = "nextcloud-data"
-  pgbackup_access_key = "pgbackup"
-  pgbackup_secret_key = random_password.pgbackup_secret.result
+  minio_root_user      = var.minio_root_user
+  minio_root_password  = random_password.minio_root.result
+  minio_bucket         = "nextcloud-data"
+  pgbackup_access_key  = "pgbackup"
+  pgbackup_secret_key  = random_password.pgbackup_secret.result
+  nextcloud_access_key = var.nextcloud_s3_access_key
+  nextcloud_secret_key = var.nextcloud_s3_secret_key
 
   # Access controls:
   #   API     - reachable from any VPC subnet (app needs it, mgmt for admin work)

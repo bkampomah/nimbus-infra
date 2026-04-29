@@ -35,8 +35,9 @@ module "nimbus_alb" {
     }
   ]
 
-  alb_allow_cidrs  = [var.vpc_cidr]
-  mgmt_allow_cidrs = var.mgmt_allow_cidrs
+  alb_allow_cidrs         = [var.vpc_cidr]
+  mgmt_allow_cidrs        = var.mgmt_allow_cidrs
+  cloudflare_tunnel_token = var.cloudflare_tunnel_token
 }
 
 output "nimbus_alb_host" {

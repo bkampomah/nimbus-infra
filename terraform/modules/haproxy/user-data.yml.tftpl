@@ -49,6 +49,7 @@ packages:
   - unattended-upgrades
   - curl
   - dnsutils
+  - apt-transport-https
 
 write_files:
   - path: /etc/haproxy/haproxy.cfg
@@ -215,5 +216,13 @@ runcmd:
   - [ systemctl, enable, --now, qemu-guest-agent ]
   - [ systemctl, enable, --now, chrony ]
   - [ bash, /root/bootstrap-nimbus-alb.sh ]
+%{ if cloudflare_tunnel_token != "" ~}
+  - curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | gpg --dearmor -o /usr/share/keyrings/cloudflare-main.gpg
+  - echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" > /etc/apt/sources.list.d/cloudflared.list
+  - apt-get update -qq
+  - apt-get install -y cloudflared
+  - cloudflared service install ${cloudflare_tunnel_token}
+  - systemctl enable --now cloudflared
+%{ endif ~}
 
 final_message: "nimbus-alb ${hostname} ready after $UPTIME seconds"

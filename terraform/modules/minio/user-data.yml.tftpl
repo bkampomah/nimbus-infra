@@ -110,6 +110,42 @@ write_files:
       mc admin policy create local pgbackup-writer /tmp/pgbackup-policy.json
       mc admin policy attach local pgbackup-writer --user "${pgbackup_access_key}"
       rm -f /tmp/pgbackup-policy.json
+      # Create scoped service account for Nextcloud primary object storage
+      mc admin user add local "${nextcloud_access_key}" "${nextcloud_secret_key}"
+      cat > /tmp/nextcloud-data-policy.json <<POLICY
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetBucketLocation",
+              "s3:ListBucket",
+              "s3:ListBucketMultipartUploads"
+            ],
+            "Resource": [
+              "arn:aws:s3:::${minio_bucket}"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetObject",
+              "s3:PutObject",
+              "s3:DeleteObject",
+              "s3:AbortMultipartUpload",
+              "s3:ListMultipartUploadParts"
+            ],
+            "Resource": [
+              "arn:aws:s3:::${minio_bucket}/*"
+            ]
+          }
+        ]
+      }
+      POLICY
+      mc admin policy create local nextcloud-data-rw /tmp/nextcloud-data-policy.json
+      mc admin policy attach local nextcloud-data-rw --user "${nextcloud_access_key}"
+      rm -f /tmp/nextcloud-data-policy.json
       echo "MinIO bootstrap complete"
 
 runcmd:

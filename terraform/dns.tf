@@ -34,8 +34,10 @@ module "nimbus_dns" {
 }
 
 provider "powerdns" {
-  server_url = module.nimbus_dns.api_endpoint
-  api_key    = module.nimbus_dns.api_key
+  # server_url is derived from the static IP — always known at plan time.
+  # api_key comes from var.powerdns_api_key (see variables.tf bootstrap note).
+  server_url = "http://${split("/", var.nimbus_dns_static_ip)[0]}:8081"
+  api_key    = var.powerdns_api_key
 }
 
 resource "powerdns_record" "infra" {

@@ -143,6 +143,27 @@ variable "pgbackup_secret_key" {
   }
 }
 
+variable "nextcloud_access_key" {
+  description = "Service account access key for Nextcloud primary object storage"
+  type        = string
+
+  validation {
+    condition     = length(var.nextcloud_access_key) > 0
+    error_message = "nextcloud_access_key must not be empty."
+  }
+}
+
+variable "nextcloud_secret_key" {
+  description = "Service account secret key for Nextcloud primary object storage"
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.nextcloud_secret_key) >= 8
+    error_message = "MinIO secret key must be at least 8 characters."
+  }
+}
+
 # -----------------------------------------------------------------------------
 # Access controls (UFW)
 # -----------------------------------------------------------------------------

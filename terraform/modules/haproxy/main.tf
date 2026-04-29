@@ -22,13 +22,14 @@ resource "proxmox_virtual_environment_file" "user_data" {
   source_raw {
     file_name = "${var.name}-user-data.yaml"
     data = templatefile("${path.module}/user-data.yml.tftpl", {
-      hostname         = var.name
-      admin_username   = var.admin_username
-      admin_password   = var.admin_password
-      admin_ssh_keys   = var.admin_ssh_keys
-      backends         = var.backends
-      mgmt_allow_cidrs = var.mgmt_allow_cidrs
-      alb_allow_cidrs  = var.alb_allow_cidrs
+      hostname                = var.name
+      admin_username          = var.admin_username
+      admin_password          = var.admin_password
+      admin_ssh_keys          = var.admin_ssh_keys
+      backends                = var.backends
+      mgmt_allow_cidrs        = var.mgmt_allow_cidrs
+      alb_allow_cidrs         = var.alb_allow_cidrs
+      cloudflare_tunnel_token = var.cloudflare_tunnel_token
     })
   }
 }
