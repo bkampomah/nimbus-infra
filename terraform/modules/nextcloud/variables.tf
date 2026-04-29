@@ -7,6 +7,16 @@ variable "vm_storage" { type = string }
 variable "iso_storage" { type = string }
 variable "subnet_bridge" { type = string }
 
+variable "static_ip" {
+  description = "Static IPv4 with CIDR suffix, e.g. 10.0.10.102/24"
+  type        = string
+}
+
+variable "gateway" {
+  description = "Default gateway for the app subnet"
+  type        = string
+}
+
 variable "cpu" {
   type    = number
   default = 4
@@ -45,6 +55,16 @@ variable "nextcloud_domain" {
 
 variable "trusted_proxies" {
   description = "CIDRs Nextcloud will trust for X-Forwarded-For"
+  type        = list(string)
+}
+
+variable "alb_allow_cidrs" {
+  description = "CIDRs allowed to reach Nextcloud over HTTP/HTTPS"
+  type        = list(string)
+}
+
+variable "mgmt_allow_cidrs" {
+  description = "CIDRs allowed SSH access"
   type        = list(string)
 }
 

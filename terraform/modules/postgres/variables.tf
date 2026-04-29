@@ -51,3 +51,30 @@ variable "allowed_cidr" {
   type        = string
   default     = "10.0.10.0/24"
 }
+
+# ---------------------------------------------------------------------------
+# Backup destination — MinIO (S3-compatible)
+# Wired from module.nimbus_s3 outputs in rds.tf so changing the bucket name
+# or rotating the service-account secret in s3.tf propagates automatically.
+# ---------------------------------------------------------------------------
+variable "s3_endpoint" {
+  description = "S3 API endpoint URL for backup pushes (e.g. http://10.0.20.101:9000)"
+  type        = string
+}
+
+variable "s3_access_key" {
+  description = "Service-account access key with write to the backup bucket"
+  type        = string
+}
+
+variable "s3_secret_key" {
+  description = "Service-account secret key (paired with s3_access_key)"
+  type        = string
+  sensitive   = true
+}
+
+variable "s3_bucket" {
+  description = "Bucket name for postgres dumps"
+  type        = string
+  default     = "pg-backups"
+}

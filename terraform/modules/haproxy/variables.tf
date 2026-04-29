@@ -54,6 +54,13 @@ variable "backends" {
   default = []
 }
 
+variable "cloudflare_tunnel_token" {
+  description = "Cloudflare Tunnel token. Leave empty to skip cloudflared install."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "alb_allow_cidrs" {
   description = "CIDRs allowed to hit the ALB on :80 (public-facing from the VPC). Defaults to all of Nimbus."
   type        = list(string)

@@ -1,4 +1,8 @@
 # terraform/modules/postgres/outputs.tf
+output "connection_string" {
+  description = "libpq connection string without password"
+  value       = "postgresql://${var.initial_db_user}@${try(proxmox_virtual_environment_vm.rds.ipv4_addresses[1][0], "pending-guest-agent")}:5432/${var.initial_db_name}"
+}
 
 output "vm_name" {
   value = proxmox_virtual_environment_vm.rds.name

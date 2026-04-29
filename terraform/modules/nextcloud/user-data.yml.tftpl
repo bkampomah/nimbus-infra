@@ -41,6 +41,7 @@ package_upgrade: true
 
 packages:
   - qemu-guest-agent
+  - ufw
   - nginx
   - php8.3-fpm
   - php8.3-cli
@@ -269,6 +270,20 @@ EOF
 runcmd:
   - [ systemctl, enable, --now, qemu-guest-agent ]
   - [ systemctl, enable, --now, chrony ]
+
+  # UFW: HTTP/S from ALB/public tier only, SSH from mgmt only.
+  - ufw --force reset
+  - ufw default deny incoming
+  - ufw default allow outgoing
+%{ for cidr in mgmt_allow_cidrs ~}
+  - ufw allow from ${cidr} to any port 22 proto tcp comment 'SSH from mgmt'
+%{ endfor ~}
+%{ for cidr in alb_allow_cidrs ~}
+  - ufw allow from ${cidr} to any port 80 proto tcp comment 'HTTP from ALB'
+  - ufw allow from ${cidr} to any port 443 proto tcp comment 'HTTPS from ALB'
+%{ endfor ~}
+  - ufw --force enable
+
   - [ systemctl, enable, --now, php8.3-fpm ]
   - [ systemctl, enable, --now, nginx ]
   - [ bash, /root/install-nextcloud.sh ]

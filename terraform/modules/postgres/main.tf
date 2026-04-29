@@ -6,9 +6,10 @@
 #   - One VM, one PostgreSQL instance
 #   - Creates one initial database + role via cloud-init (for Nextcloud)
 #   - Listens only on the data-tier subnet (enforced by pg_hba.conf + SG)
+#   - Daily backups via systemd timer to /var/backups/postgres + push to MinIO
 #
 # Real RDS does far more (automated backups, PITR, multi-AZ). Layer those
-# on later — pgbackrest → MinIO for backups is the natural next step.
+# on later — distributed MinIO + cross-host replication is the natural next step.
 
 terraform {
   required_providers {
@@ -35,6 +36,12 @@ resource "proxmox_virtual_environment_file" "user_data" {
       initial_db_user = var.initial_db_user
       initial_db_pw   = var.initial_db_password
       allowed_cidr    = var.allowed_cidr
+
+      # MinIO targets for the pg-backup push step
+      s3_endpoint   = var.s3_endpoint
+      s3_access_key = var.s3_access_key
+      s3_secret_key = var.s3_secret_key
+      s3_bucket     = var.s3_bucket
     })
   }
 }

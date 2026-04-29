@@ -1,0 +1,7 @@
+
+# Terraform binary plan files
+*.plan
+.terraform.tfplan*
+
+# Windows alternate data streams (when copying files via Explorer to WSL)
+*:Zone.Identifier

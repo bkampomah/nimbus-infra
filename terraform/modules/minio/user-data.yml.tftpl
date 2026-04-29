@@ -1,70 +1,61 @@
 #cloud-config
-# ---------------------------------------------------------------------------
-# cloud-init for nimbus-s3 (MinIO on Ubuntu 24.04)
-# Installs MinIO, mounts the dedicated data disk at /mnt/minio, starts the
-# systemd unit, then creates the Nextcloud bucket + a scoped service account.
-# ---------------------------------------------------------------------------
-
 hostname: ${hostname}
 manage_etc_hosts: true
 preserve_hostname: false
 
 users:
   - name: ${admin_username}
-    groups: [sudo, adm]
+    sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
-    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    groups: [sudo]
     lock_passwd: false
+    plain_text_passwd: ${admin_password}
     ssh_authorized_keys:
 %{ for key in admin_ssh_keys ~}
       - ${key}
 %{ endfor ~}
 
-chpasswd:
-  expire: false
-  list: |
-    ${admin_username}:${admin_password}
-
-ssh_pwauth: true
-
 package_update: true
-package_upgrade: true
+package_upgrade: false
 
 packages:
+  - ufw
   - qemu-guest-agent
-  - curl
-  - wget
-  - parted
   - xfsprogs
-  - chrony
-  - unattended-upgrades
+  - curl
+  - ca-certificates
 
+# Lesson from 5a: configs that touch package-installed paths go in runcmd,
+# not write_files. write_files only stages content for runcmd to consume.
 write_files:
-  - path: /etc/default/minio
+  # --- Staged: MinIO environment (consumed by systemd service) ----------
+  - path: /root/staging/minio.env
     owner: root:root
-    permissions: '0640'
+    permissions: '0600'
     content: |
-      MINIO_VOLUMES="/mnt/minio/data"
-      MINIO_OPTS="--console-address :9001 --address :9000"
-      MINIO_ROOT_USER="${minio_root_user}"
-      MINIO_ROOT_PASSWORD="${minio_root_password}"
-      MINIO_SERVER_URL="http://${hostname}:9000"
+      MINIO_ROOT_USER=${minio_root_user}
+      MINIO_ROOT_PASSWORD=${minio_root_password}
+      MINIO_VOLUMES=/mnt/minio/data
+      MINIO_OPTS=--console-address :9001
 
-  - path: /etc/systemd/system/minio.service
+  # --- Staged: MinIO systemd service ------------------------------------
+  - path: /root/staging/minio.service
     owner: root:root
     permissions: '0644'
     content: |
       [Unit]
-      Description=MinIO
+      Description=MinIO Object Storage
       Documentation=https://min.io/docs/minio/linux/index.html
       Wants=network-online.target
       After=network-online.target
       AssertFileIsExecutable=/usr/local/bin/minio
+      AssertFileNotEmpty=/etc/default/minio
 
       [Service]
-      WorkingDirectory=/usr/local
+      Type=notify
       User=minio-user
       Group=minio-user
+      ProtectProc=invisible
       EnvironmentFile=/etc/default/minio
       ExecStart=/usr/local/bin/minio server $MINIO_OPTS $MINIO_VOLUMES
       Restart=always
@@ -72,91 +63,136 @@ write_files:
       TasksMax=infinity
       TimeoutStopSec=infinity
       SendSIGKILL=no
+      OOMScoreAdjust=-1000
 
       [Install]
       WantedBy=multi-user.target
 
-  - path: /root/bootstrap-minio.sh
+  # --- Staged: bootstrap script (runs once after MinIO is healthy) ------
+  - path: /root/staging/bootstrap-minio.sh
     owner: root:root
     permissions: '0700'
     content: |
       #!/bin/bash
       set -euo pipefail
-
-      # ── User + data disk ───────────────────────────────────────────────────
-      id -u minio-user &>/dev/null || useradd -r minio-user -s /sbin/nologin
-
-      DATA_DEV=/dev/sdb
-      if [ -b "$DATA_DEV" ] && ! blkid "$DATA_DEV" >/dev/null 2>&1; then
-        mkfs.xfs -L minio-data "$DATA_DEV"
-      fi
-
-      mkdir -p /mnt/minio/data
-      if ! grep -q '/mnt/minio' /etc/fstab; then
-        echo "LABEL=minio-data /mnt/minio xfs defaults,noatime 0 2" >> /etc/fstab
-      fi
-      mountpoint -q /mnt/minio || mount /mnt/minio
-      chown -R minio-user:minio-user /mnt/minio
-
-      # ── MinIO server binary + client ───────────────────────────────────────
-      if [ ! -x /usr/local/bin/minio ]; then
-        curl -fsSL -o /usr/local/bin/minio https://dl.min.io/server/minio/release/linux-amd64/minio
-        chmod +x /usr/local/bin/minio
-      fi
-      if [ ! -x /usr/local/bin/mc ]; then
-        curl -fsSL -o /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-amd64/mc
-        chmod +x /usr/local/bin/mc
-      fi
-
-      systemctl daemon-reload
-      systemctl enable --now minio
-
-      # ── Wait for MinIO to accept API calls ─────────────────────────────────
-      for i in {1..30}; do
-        if curl -fsSL http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1; then
-          break
+      # Wait for MinIO API to come up
+      for i in $(seq 1 60); do
+        if curl -sf http://127.0.0.1:9000/minio/health/live >/dev/null; then
+          echo "MinIO is up after $i seconds"; break
         fi
-        sleep 2
+        sleep 1
       done
-
-      # ── Bucket + scoped credentials for Nextcloud ──────────────────────────
-      # Using `mc` (the MinIO Client) as the MinIO equivalent of `aws iam`.
-      export MC_HOST_local="http://${minio_root_user}:${minio_root_password}@127.0.0.1:9000"
-
-      mc mb --ignore-existing local/${nextcloud_bucket}
-      mc anonymous set none local/${nextcloud_bucket}
-
-      # Policy scoped to just the Nextcloud bucket (IAM-style).
-      cat > /tmp/nextcloud-policy.json <<'POLICY'
+      # Configure mc alias
+      mc alias set local http://127.0.0.1:9000 "${minio_root_user}" "${minio_root_password}"
+      # Create initial bucket with versioning (idempotent)
+      mc mb --ignore-existing local/${minio_bucket}
+      mc version enable local/${minio_bucket}
+      # Create pg-backups bucket with versioning
+      mc mb --ignore-existing local/pg-backups
+      mc version enable local/pg-backups
+      # Create scoped service account for pg-backup writer
+      mc admin user add local "${pgbackup_access_key}" "${pgbackup_secret_key}"
+      cat > /tmp/pgbackup-policy.json <<POLICY
       {
         "Version": "2012-10-17",
         "Statement": [
           {
             "Effect": "Allow",
-            "Action": ["s3:*"],
+            "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
             "Resource": [
-              "arn:aws:s3:::${nextcloud_bucket}",
-              "arn:aws:s3:::${nextcloud_bucket}/*"
+              "arn:aws:s3:::pg-backups",
+              "arn:aws:s3:::pg-backups/*"
             ]
           }
         ]
       }
       POLICY
-
-      mc admin policy create local nextcloud-rw /tmp/nextcloud-policy.json || true
-
-      # Create or rotate the user with the chosen access/secret pair.
-      if mc admin user info local ${nextcloud_access_key} >/dev/null 2>&1; then
-        mc admin user remove local ${nextcloud_access_key}
-      fi
-      mc admin user add local ${nextcloud_access_key} ${nextcloud_secret_key}
-      mc admin policy attach local nextcloud-rw --user ${nextcloud_access_key}
-
-      echo "nimbus-s3 bootstrap complete."
+      mc admin policy create local pgbackup-writer /tmp/pgbackup-policy.json
+      mc admin policy attach local pgbackup-writer --user "${pgbackup_access_key}"
+      rm -f /tmp/pgbackup-policy.json
+      # Create scoped service account for Nextcloud primary object storage
+      mc admin user add local "${nextcloud_access_key}" "${nextcloud_secret_key}"
+      cat > /tmp/nextcloud-data-policy.json <<POLICY
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetBucketLocation",
+              "s3:ListBucket",
+              "s3:ListBucketMultipartUploads"
+            ],
+            "Resource": [
+              "arn:aws:s3:::${minio_bucket}"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetObject",
+              "s3:PutObject",
+              "s3:DeleteObject",
+              "s3:AbortMultipartUpload",
+              "s3:ListMultipartUploadParts"
+            ],
+            "Resource": [
+              "arn:aws:s3:::${minio_bucket}/*"
+            ]
+          }
+        ]
+      }
+      POLICY
+      mc admin policy create local nextcloud-data-rw /tmp/nextcloud-data-policy.json
+      mc admin policy attach local nextcloud-data-rw --user "${nextcloud_access_key}"
+      rm -f /tmp/nextcloud-data-policy.json
+      echo "MinIO bootstrap complete"
 
 runcmd:
-  - [ systemctl, enable, --now, qemu-guest-agent ]
-  - [ systemctl, enable, --now, chrony ]
-  - [ bash, /root/bootstrap-minio.sh ]
+  - systemctl enable --now qemu-guest-agent
 
-final_message: "nimbus-s3 ${hostname} ready after $UPTIME seconds"
+  # --- UFW: tight per-port rules ----------------------------------------
+  - ufw --force reset
+  - ufw default deny incoming
+  - ufw default allow outgoing
+%{ for cidr in mgmt_allow_cidrs ~}
+  - ufw allow from ${cidr} to any port 22 proto tcp comment 'SSH from mgmt'
+%{ endfor ~}
+%{ for cidr in api_allow_cidrs ~}
+  - ufw allow from ${cidr} to any port 9000 proto tcp comment 'S3 API'
+%{ endfor ~}
+%{ for cidr in console_allow_cidrs ~}
+  - ufw allow from ${cidr} to any port 9001 proto tcp comment 'MinIO console'
+%{ endfor ~}
+  - ufw --force enable
+
+  # --- Format and mount the data disk -----------------------------------
+  # /dev/sdb is the second virtio-scsi disk (scsi1 in Proxmox)
+  - mkfs.xfs -L minio-data /dev/sdb
+  - mkdir -p /mnt/minio/data
+  - echo 'LABEL=minio-data /mnt/minio xfs defaults,noatime 0 2' >> /etc/fstab
+  - mount /mnt/minio
+
+  # --- Install MinIO server + mc client ---------------------------------
+  - useradd -r -s /sbin/nologin -d /mnt/minio minio-user || true
+  - curl -sSfLo /usr/local/bin/minio https://dl.min.io/server/minio/release/linux-amd64/minio
+  - chmod +x /usr/local/bin/minio
+  - curl -sSfLo /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-amd64/mc
+  - chmod +x /usr/local/bin/mc
+  - chown -R minio-user:minio-user /mnt/minio
+
+  # --- Install service + env, start ------------------------------------
+  - install -o root -g root -m 0644 /root/staging/minio.service /etc/systemd/system/minio.service
+  - install -o root -g root -m 0640 /root/staging/minio.env /etc/default/minio
+  - chgrp minio-user /etc/default/minio
+  - systemctl daemon-reload
+  - systemctl enable --now minio.service
+
+  # --- Bootstrap buckets + IAM ------------------------------------------
+  - bash /root/staging/bootstrap-minio.sh
+
+  # --- Cleanup ----------------------------------------------------------
+  - rm -rf /root/staging
+  - truncate -s 0 /var/log/cloud-init-output.log || true
+
+final_message: "nimbus-s3 (MinIO) bootstrap complete in $UPTIME seconds. API on :9000, console on :9001"
