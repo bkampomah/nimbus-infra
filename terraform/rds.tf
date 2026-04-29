@@ -4,9 +4,8 @@
 # Lives in the data subnet; serves the app subnet (Nextcloud in 5c) and
 # accepts connections only from 10.0.10.0/24 via UFW + pg_hba.conf.
 #
-# IP is assigned by DHCP (pfSense reservation pins 10.0.20.100 to this VM's
-# MAC). var.nimbus_rds_ip is the expected post-DHCP address; used to seed
-# the PowerDNS A record.
+# IP is static (10.0.20.103) — set via var.nimbus_rds_ip and passed to the
+# postgres module's cloud-init ip_config. Also seeds the PowerDNS A record.
 #
 # Daily pg_dumpall pushed to nimbus-s3 (pg-backups bucket) via the pgbackup
 # service account — credentials read from module.nimbus_s3 outputs.
@@ -33,6 +32,8 @@ module "nimbus_rds" {
   vm_storage     = var.proxmox_vm_storage
   iso_storage    = var.proxmox_iso_storage
   subnet_bridge  = var.subnets.data.bridge
+  static_ip      = "${var.nimbus_rds_ip}/24"
+  gateway        = var.subnets.data.gateway
 
   admin_username = var.admin_username
   admin_password = var.admin_password

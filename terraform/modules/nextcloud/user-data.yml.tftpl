@@ -61,6 +61,7 @@ packages:
   - postgresql-client
   - redis-tools
   - unzip
+  - bzip2
   - sudo
   - curl
   - chrony
@@ -249,14 +250,21 @@ write_files:
         --value="$(echo '${s3_endpoint}' | sed -E 's|https?://||' | awk -F: '{print ($2 ? $2 : 9000)}')"
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments use_ssl \
         --value="$(echo '${s3_endpoint}' | grep -q '^https' && echo true || echo false)" --type=boolean
+      # MinIO quirk 1: path-style addressing (host/bucket) is required. MinIO does
+      # not support virtual-hosted-style URLs (bucket.host) — Nextcloud defaults to
+      # virtual-hosted, so this flag must be true or every object request 404s.
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments use_path_style \
         --value=true --type=boolean
+      # MinIO quirk 2: region must be a non-empty string. MinIO ignores the value
+      # entirely but Nextcloud's S3 client rejects a blank region at startup.
+      # "us-east-1" is MinIO's built-in default mock region — safe to leave as-is.
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments region --value='us-east-1'
 
       # ── Cron (the "correct" background job backend per Nextcloud docs) ────
-      crontab -u www-data - <<EOF
-*/5 * * * * php -f $NC_WEBROOT/cron.php
-EOF
+      # One-liner avoids a heredoc whose EOF terminator would have to sit at
+      # column 0, which terminates the YAML block scalar early and causes
+      # cloud-init to discard the entire user-data file.
+      echo "*/5 * * * * php -f $NC_WEBROOT/cron.php" | crontab -u www-data -
       sudo -u www-data php "$NC_WEBROOT/occ" background:cron
 
       # ── nginx + PHP-FPM ────────────────────────────────────────────────────
@@ -283,6 +291,21 @@ runcmd:
   - ufw allow from ${cidr} to any port 443 proto tcp comment 'HTTPS from ALB'
 %{ endfor ~}
   - ufw --force enable
+
+  # Persist MTU 1420 — the VPC path MTU is 1420 (pfSense WAN headroom).
+  # Without this, large TCP transfers (e.g. Nextcloud tarball download) hit
+  # ICMP fragmentation-needed and get reset mid-stream.
+  - chmod 600 /etc/netplan/50-cloud-init.yaml
+  - |
+    tee /etc/netplan/99-nimbus-mtu.yaml > /dev/null <<'NETPLAN'
+    network:
+      version: 2
+      ethernets:
+        eth0:
+          mtu: 1420
+    NETPLAN
+  - chmod 600 /etc/netplan/99-nimbus-mtu.yaml
+  - netplan apply
 
   - [ systemctl, enable, --now, php8.3-fpm ]
   - [ systemctl, enable, --now, nginx ]

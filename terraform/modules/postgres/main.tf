@@ -84,7 +84,8 @@ resource "proxmox_virtual_environment_vm" "rds" {
 
     ip_config {
       ipv4 {
-        address = "dhcp"
+        address = var.static_ip
+        gateway = var.gateway
       }
     }
   }
@@ -98,6 +99,13 @@ resource "proxmox_virtual_environment_vm" "rds" {
   }
 
   lifecycle {
-    ignore_changes = [initialization[0].user_account]
+    ignore_changes = [
+      initialization[0].user_account,
+      # bpg/proxmox forces VM replace when either ip_config or user_data_file_id
+      # changes. Ignore both so template and IP updates don't rebuild running VMs.
+      # To intentionally rebuild: terraform apply -replace=module.nimbus_rds.proxmox_virtual_environment_vm.rds
+      initialization[0].ip_config,
+      initialization[0].user_data_file_id,
+    ]
   }
 }

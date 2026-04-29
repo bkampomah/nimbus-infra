@@ -39,7 +39,7 @@ package_upgrade: true
 packages:
   - qemu-guest-agent
   - postgresql-16
-  - postgresql-contrib-16
+  - postgresql-contrib
   - chrony
   - unattended-upgrades
   - curl
@@ -47,8 +47,11 @@ packages:
 
 write_files:
   # Listen on all interfaces (Proxmox firewall + pg_hba do the filtering)
+  # owner is root:root here — packages run before write_files so postgres user
+  # exists, but cloud-init resolves owner BEFORE packages run (bug/ordering).
+  # init-nimbus-rds.sh corrects ownership after package install.
   - path: /etc/postgresql/16/main/conf.d/10-nimbus-listen.conf
-    owner: postgres:postgres
+    owner: root:root
     permissions: '0644'
     content: |
       listen_addresses = '*'
@@ -76,6 +79,10 @@ write_files:
     content: |
       #!/bin/bash
       set -euo pipefail
+
+      # Fix ownership on listen config — write_files set it root:root to avoid
+      # the cloud-init owner-resolution-before-packages ordering bug.
+      chown postgres:postgres /etc/postgresql/16/main/conf.d/10-nimbus-listen.conf
 
       bash /usr/local/sbin/nimbus-pg-hba-init.sh
       systemctl restart postgresql
