@@ -135,6 +135,12 @@ resource "proxmox_virtual_environment_vm" "nextcloud" {
   }
 
   lifecycle {
-    ignore_changes = [initialization[0].user_account]
+    ignore_changes = [
+      initialization[0].user_account,
+      # bpg/proxmox forces VM replace when user_data_file_id changes.
+      # Ignore so template updates don't rebuild running VMs.
+      # To intentionally rebuild: terraform apply -replace=module.nimbus_nextcloud.proxmox_virtual_environment_vm.cloud
+      initialization[0].user_data_file_id,
+    ]
   }
 }

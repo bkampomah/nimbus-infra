@@ -30,7 +30,7 @@ module "nimbus_nextcloud" {
   alb_allow_cidrs    = ["${var.nimbus_alb_ip}/32"]
   mgmt_allow_cidrs   = var.mgmt_allow_cidrs
 
-  db_host     = var.nimbus_rds_ip
+  db_host     = module.nimbus_rds.host
   db_name     = module.nimbus_rds.initial_db_name
   db_user     = module.nimbus_rds.initial_db_user
   db_password = random_password.nextcloud_db.result

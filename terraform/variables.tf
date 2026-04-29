@@ -190,7 +190,7 @@ variable "nimbus_s3_data_disk_size_gb" {
 variable "nimbus_rds_ip" {
   description = "Static IP for nimbus-rds in the data subnet"
   type        = string
-  default     = "10.0.20.100"
+  default     = "10.0.20.103"
 }
 
 variable "nimbus_cloud_ip" {

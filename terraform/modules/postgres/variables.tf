@@ -6,6 +6,14 @@ variable "template_vm_id" { type = number }
 variable "vm_storage" { type = string }
 variable "iso_storage" { type = string }
 variable "subnet_bridge" { type = string }
+variable "static_ip" {
+  description = "Static IPv4 address with prefix (e.g. '10.0.20.100/24')"
+  type        = string
+}
+variable "gateway" {
+  description = "Default gateway for the data subnet"
+  type        = string
+}
 
 variable "cpu" {
   type    = number

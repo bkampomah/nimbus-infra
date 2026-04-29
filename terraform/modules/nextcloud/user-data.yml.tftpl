@@ -61,6 +61,7 @@ packages:
   - postgresql-client
   - redis-tools
   - unzip
+  - bzip2
   - sudo
   - curl
   - chrony
@@ -290,6 +291,21 @@ runcmd:
   - ufw allow from ${cidr} to any port 443 proto tcp comment 'HTTPS from ALB'
 %{ endfor ~}
   - ufw --force enable
+
+  # Persist MTU 1420 — the VPC path MTU is 1420 (pfSense WAN headroom).
+  # Without this, large TCP transfers (e.g. Nextcloud tarball download) hit
+  # ICMP fragmentation-needed and get reset mid-stream.
+  - chmod 600 /etc/netplan/50-cloud-init.yaml
+  - |
+    tee /etc/netplan/99-nimbus-mtu.yaml > /dev/null <<'NETPLAN'
+    network:
+      version: 2
+      ethernets:
+        eth0:
+          mtu: 1420
+    NETPLAN
+  - chmod 600 /etc/netplan/99-nimbus-mtu.yaml
+  - netplan apply
 
   - [ systemctl, enable, --now, php8.3-fpm ]
   - [ systemctl, enable, --now, nginx ]
