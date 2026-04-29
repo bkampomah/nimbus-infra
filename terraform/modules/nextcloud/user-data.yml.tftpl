@@ -249,8 +249,14 @@ write_files:
         --value="$(echo '${s3_endpoint}' | sed -E 's|https?://||' | awk -F: '{print ($2 ? $2 : 9000)}')"
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments use_ssl \
         --value="$(echo '${s3_endpoint}' | grep -q '^https' && echo true || echo false)" --type=boolean
+      # MinIO quirk 1: path-style addressing (host/bucket) is required. MinIO does
+      # not support virtual-hosted-style URLs (bucket.host) — Nextcloud defaults to
+      # virtual-hosted, so this flag must be true or every object request 404s.
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments use_path_style \
         --value=true --type=boolean
+      # MinIO quirk 2: region must be a non-empty string. MinIO ignores the value
+      # entirely but Nextcloud's S3 client rejects a blank region at startup.
+      # "us-east-1" is MinIO's built-in default mock region — safe to leave as-is.
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments region --value='us-east-1'
 
       # ── Cron (the "correct" background job backend per Nextcloud docs) ────
