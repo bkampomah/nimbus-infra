@@ -4,7 +4,9 @@
 # Lives in the public subnet; fronts services running in the app subnet.
 #
 # Phase 4b: initial ALB + AIO backend.
-# Phase 5d: add nimbus-cloud-01 backend (cloud-app.nimbus.local).
+# Phase 5c/5d: nimbus-cloud-01 is now the primary public Nextcloud.
+#   cloud.nimbusnode.org (Cloudflare Tunnel CNAME) → nextcloud-cloud backend.
+#   AIO kept reachable on cloud.nimbus.local for internal use.
 
 module "nimbus_alb" {
   source = "./modules/haproxy"
@@ -26,15 +28,14 @@ module "nimbus_alb" {
   backends = [
     {
       name        = "nextcloud-aio"
-      host_match  = "cloud.nimbus.local"
+      host_match  = "cloud.nimbus.local"   # internal only; public traffic migrated to cloud-01
       server_ip   = var.nimbus_aio_ip
       server_port = 11000
       check       = true
     },
-    # Phase 5d: nimbus-cloud-01 (app-tier Nextcloud, port 80 via nginx)
     {
       name        = "nextcloud-cloud"
-      host_match  = "cloud-app.nimbus.local"
+      host_match  = "cloud-app.nimbus.local ${var.nextcloud_domain}" # cloud.nimbusnode.org + cloud-app.nimbus.local
       server_ip   = var.nimbus_cloud_ip
       server_port = 80
       check       = true
@@ -44,6 +45,11 @@ module "nimbus_alb" {
   alb_allow_cidrs         = [var.vpc_cidr]
   mgmt_allow_cidrs        = var.mgmt_allow_cidrs
   cloudflare_tunnel_token = var.cloudflare_tunnel_token
+
+  # Combined PEM bundle (server cert + CA chain + private key) for the internal
+  # HTTPS frontend. HAProxy binds :443 on the ALB's VPC IP and uses this cert.
+  # Clients trust the CA by importing the nimbus_ca_cert Terraform output.
+  tls_pem = "${tls_locally_signed_cert.nimbus_alb.cert_pem}${tls_self_signed_cert.nimbus_ca.cert_pem}${tls_private_key.nimbus_alb.private_key_pem}"
 }
 
 output "nimbus_alb_host" {

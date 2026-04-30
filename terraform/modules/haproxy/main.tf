@@ -26,10 +26,12 @@ resource "proxmox_virtual_environment_file" "user_data" {
       admin_username          = var.admin_username
       admin_password          = var.admin_password
       admin_ssh_keys          = var.admin_ssh_keys
+      static_ip               = var.static_ip
       backends                = var.backends
       mgmt_allow_cidrs        = var.mgmt_allow_cidrs
       alb_allow_cidrs         = var.alb_allow_cidrs
       cloudflare_tunnel_token = var.cloudflare_tunnel_token
+      tls_pem                 = var.tls_pem
     })
   }
 }
@@ -89,6 +91,10 @@ resource "proxmox_virtual_environment_vm" "alb" {
   lifecycle {
     ignore_changes = [
       initialization[0].user_account,
+      # bpg/proxmox forces VM replace when user_data_file_id or ip_config changes.
+      # Ignore both — to intentionally rebuild: terraform apply -replace=module.nimbus_alb.proxmox_virtual_environment_vm.alb
+      initialization[0].ip_config,
+      initialization[0].user_data_file_id,
     ]
   }
 }

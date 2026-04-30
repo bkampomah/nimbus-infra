@@ -145,14 +145,14 @@ variable "template_vm_id" {
 variable "nextcloud_domain" {
   description = <<-EOT
     Public FQDN users hit. With a Cloudflare Tunnel this is your Cloudflare
-    hostname (e.g. nimbuscloud.org). Internally, nimbus-alb is still
+    hostname (e.g. cloud.nimbusnode.org). Internally, nimbus-alb is still
     reachable as cloud.nimbus.local via PowerDNS for health checks /
     bastion access, but this variable drives Nextcloud's overwrite.*
     settings so that emailed links, share URLs, and mobile app login all
     use the public name.
   EOT
   type        = string
-  default     = "nimbuscloud.org"
+  default     = "cloud.nimbusnode.org"
 }
 
 variable "cloudflare_tunnel_token" {
@@ -278,6 +278,46 @@ variable "mgmt_allow_cidrs" {
   description = "CIDRs allowed to reach management APIs (e.g. PowerDNS API, future ALB admin UIs). Typically your home/office LAN plus the VPC itself."
   type        = list(string)
   default     = ["10.0.0.0/16", "192.168.0.0/16", "127.0.0.1/32"]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# nimbus-bastion (DMZ workstation/jumpbox for pfSense GUI testing)
+# ─────────────────────────────────────────────────────────────────────────────
+
+variable "nimbus_bastion_vm_id" {
+  description = "Proxmox VMID for nimbus-bastion"
+  type        = number
+  default     = 209
+}
+
+variable "nimbus_bastion_ip" {
+  description = "Static IP for nimbus-bastion in the public/DMZ subnet"
+  type        = string
+  default     = "10.0.1.20"
+}
+
+variable "bastion_ssh_allow_cidrs" {
+  description = "CIDRs allowed to SSH into nimbus-bastion"
+  type        = list(string)
+  default     = ["192.168.0.0/16", "10.0.0.0/16"]
+}
+
+variable "pfsense_gui_host" {
+  description = "pfSense WebConfigurator host/IP reachable from nimbus-bastion"
+  type        = string
+  default     = "10.0.1.1"
+}
+
+variable "pfsense_gui_port" {
+  description = "pfSense WebConfigurator HTTPS port"
+  type        = number
+  default     = 443
+}
+
+variable "pfsense_tunnel_local_port" {
+  description = "Local workstation port used by the suggested SSH tunnel"
+  type        = number
+  default     = 8443
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
