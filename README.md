@@ -92,12 +92,12 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 - Backends: `nextcloud-aio` (internal only), `nextcloud-cloud` (nimbus-cloud-01)
 - `:80` HTTP frontend for cloudflared; `:443` HTTPS with SNI cert selection
 
-### ✅ Phase 5 — Nextcloud + TLS + Cloudflare Tunnel
-- **5a:** terraform fmt / provider upgrades
-- **5b:** pgbackrest pipeline; MinIO mc install
-- **5c/5d:** nimbus-cloud-01 deployed (Nextcloud 30.0.17, nginx, PHP-FPM 8.3, PostgreSQL backend, MinIO as S3 Primary Object Storage)
-- **5e:** HTTPS on nimbus-alb — LE wildcard cert (`*.nimbusnode.org`) via acme.sh + Cloudflare DNS-01; step-ca wildcard cert (`*.nimbus.local`); SNI-based cert directory in HAProxy
-- **5f:** Cloudflare Tunnel (cloudflared on nimbus-alb, protocol: http2); bastion module; Nimbus internal CA in Terraform (`hashicorp/tls`); `nimbus-ca.crt` exported for client import
+### ✅ Phase 5 — Data + App Tier (see ARCHITECTURE.md §15 for complexity guide)
+- **5a** *(Medium)* — PostgreSQL module: pg_hba, listen_addresses, pgbackrest → MinIO WAL archive
+- **5b** *(Easy)* — MinIO module: single-node on dedicated data disk; `mcli` alias + bucket + IAM user
+- **5c** *(Hard)* — Nextcloud app: `occ maintenance:install` automated in cloud-init; MinIO as S3 Primary Object Storage; nginx + PHP-FPM 8.3; TLS (LE wildcard + step-ca internal CA) on nimbus-alb
+- **5d** *(Easy)* — ALB + DNS wiring: HAProxy backend for nimbus-cloud-01; PowerDNS A record; Cloudflare Tunnel (cloudflared on nimbus-alb, `protocol: http2`)
+- **5e** *(Trivial)* — Cutover: Cloudflare CNAME flipped from AIO tunnel to ALB tunnel; AIO kept on `cloud.nimbus.local` for rollback
 
 ### 🔲 Phase 6 — Observability
 - Prometheus + node-exporter on each VM

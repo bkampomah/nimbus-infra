@@ -226,7 +226,54 @@ Nimbus runs a **step-ca** internal Certificate Authority for TLS on `*.nimbus.lo
 
 ---
 
-## 15. Observability
+## 15. Phase 5 — Data + App Tier Build Guide
+
+Phase 5 is where the abstract AWS analogies become concrete. The sub-phases below are ordered by dependency, not difficulty. Do them in sequence.
+
+| Sub-phase | What                  | Complexity | Why                                                               |
+|-----------|-----------------------|------------|-------------------------------------------------------------------|
+| 5a        | PostgreSQL module     | Medium     | DB config is fiddly — pg_hba, listen_addresses, pgbackrest wiring |
+| 5b        | MinIO module          | Easy       | Single-node install is simple; mc alias + bucket creation is it   |
+| 5c        | Nextcloud app         | Hard       | `occ maintenance:install` automation via cloud-init is the tricky one |
+| 5d        | ALB + DNS wiring      | Easy       | Same HAProxy backend pattern as Phase 4b; DNS record is one line  |
+| 5e        | Cutover               | Trivial    | A DNS flip — `cloud.nimbusnode.org` CNAME to the Cloudflare Tunnel|
+
+### 5a — PostgreSQL module (Medium)
+
+The hard parts are not the install — `apt install postgresql-16` is one line. The fiddly parts:
+
+- `pg_hba.conf`: must allow connections from the app subnet (`10.0.10.0/24`) with `scram-sha-256`, not just `localhost`. Cloud-init rewrites this file; ordering matters because postgres reads it top-to-bottom.
+- `listen_addresses = '*'`: default is `localhost` only. Must be changed before any remote client can connect.
+- `pg_isready` loop in Nextcloud cloud-init: the app VM boots in parallel with the DB VM. The install script must poll until the DB is accepting connections before running `occ maintenance:install`.
+- pgbackrest: requires an S3-compatible endpoint (MinIO), a stanza, and a WAL archive command in `postgresql.conf`. Set this up before the DB has any real data.
+
+### 5b — MinIO module (Easy)
+
+Single-node MinIO on a dedicated data disk (`/dev/sdb` → mounted at `/data/minio`). The install is a binary download + systemd unit. The only gotchas:
+
+- The `mc` CLI is packaged as `mcli` in Ubuntu 24.04 apt repos (conflicts with Midnight Commander). Install `mcli`, not `mc`.
+- Create the Nextcloud bucket and IAM-style user (access key + secret) before Nextcloud boots, or the objectstore init fails.
+
+### 5c — Nextcloud app (Hard)
+
+The difficulty is fully automating `occ maintenance:install` in a cloud-init script that runs once at first boot, against a remote DB and a remote S3 store. Things that go wrong:
+
+- **Backslash escaping in PHP class names.** `\OC\Files\ObjectStore\S3` must arrive in `config.php` with single backslashes. Shell quoting and YAML escaping interact — use single-quoted shell strings (`'\OC\Files\ObjectStore\S3'`) in the `occ config:system:set` call.
+- **MinIO path-style vs virtual-hosted.** Nextcloud defaults to virtual-hosted S3 URLs (`bucket.host`). MinIO requires path-style (`host/bucket`). Set `use_path_style = true` or every object operation returns 404.
+- **Heredoc at column 0 breaks YAML.** A `<<EOF` whose terminator sits at column 0 closes the YAML block scalar early. cloud-init silently discards the rest of the file. Use one-liners instead of heredocs inside YAML `|` blocks.
+- **MTU 1420.** The pfSense WAN adds overhead. Without MTU clamping, large downloads (Nextcloud tarball, pgbackrest base backups) hit ICMP fragmentation-needed and stall. Set `mtu: 1420` in netplan on every VM.
+
+### 5d — ALB + DNS wiring (Easy)
+
+Add a backend block to the HAProxy module for `nimbus-cloud-01`, add an ACL for the hostname, add a PowerDNS A record. This is identical to what Phase 4b did for the AIO backend — copy, tweak the IP and host header, apply.
+
+### 5e — Cutover (Trivial)
+
+Update the Cloudflare CNAME for `cloud.nimbusnode.org` to point at the new Cloudflare Tunnel (running on nimbus-alb) instead of the old AIO tunnel. Cloudflare propagates in under a minute. The old AIO backend stays reachable internally at `cloud.nimbus.local` for rollback.
+
+---
+
+## 16. Observability
 
 | AWS              | Nimbus (planned)                            |
 |------------------|---------------------------------------------|
