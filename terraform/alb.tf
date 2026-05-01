@@ -39,6 +39,13 @@ module "nimbus_alb" {
       server_ip   = var.nimbus_cloud_ip
       server_port = 80
       check       = true
+    },
+    {
+      name        = "grafana"
+      host_match  = "mon.nimbus.local"
+      server_ip   = var.nimbus_mon_ip
+      server_port = 3000
+      check       = true
     }
   ]
 

@@ -50,6 +50,8 @@ resource "powerdns_record" "infra" {
     # New Nextcloud app-tier internal hostname — ALB routes by Host header
     # to the nextcloud-cloud backend (nimbus-cloud-01 on :80).
     "cloud-app.nimbus.local." = var.nimbus_alb_ip
+    # Grafana — ALB routes mon.nimbus.local → nimbus-mon:3000
+    "mon.nimbus.local." = var.nimbus_alb_ip
   }
 
   zone    = "nimbus.local."
