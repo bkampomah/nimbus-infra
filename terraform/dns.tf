@@ -45,6 +45,9 @@ resource "powerdns_record" "infra" {
     "nimbus-dns.nimbus.local."       = module.nimbus_dns.host
     "nimbus-alb.nimbus.local."       = var.nimbus_alb_ip
     "nimbus-cloud-aio.nimbus.local." = var.nimbus_aio_ip
+    # New Nextcloud app-tier internal hostname — ALB routes by Host header
+    # to the nextcloud-cloud backend (nimbus-cloud-01 on :80).
+    "cloud-app.nimbus.local."        = var.nimbus_alb_ip
   }
 
   zone    = "nimbus.local."
@@ -64,7 +67,7 @@ resource "powerdns_record" "cloud_internal_cname" {
 
 resource "powerdns_record" "nimbusnode_internal" {
   for_each = {
-    "cloud.nimbusnode.org." = var.nimbus_aio_ip
+    "cloud.nimbusnode.org." = var.nimbus_alb_ip
   }
 
   zone    = "nimbusnode.org."

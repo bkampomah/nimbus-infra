@@ -20,6 +20,10 @@ terraform {
       source  = "pan-net/powerdns"
       version = "~> 1.5"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 
   # backend "remote" {

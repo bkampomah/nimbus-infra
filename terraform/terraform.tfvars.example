@@ -102,3 +102,17 @@ nimbus_cloud_ip = "10.0.10.102"
 
 # Planned IP for nimbus-alb (Phase 4). Leave as-is for now.
 nimbus_alb_ip = "10.0.1.10"
+
+# ─── nimbus-bastion ──────────────────────────────────────────────────────────
+# SSH workstation/jumpbox on the public/DMZ subnet. Use the output
+# `pfsense_gui_tunnel_command` and then browse to `pfsense_gui_tunnel_url`.
+nimbus_bastion_vm_id = 209
+nimbus_bastion_ip    = "10.0.1.20"
+
+# Keep this narrow if your home LAN is smaller than 192.168.0.0/16.
+bastion_ssh_allow_cidrs = ["192.168.0.0/16", "10.0.0.0/16"]
+
+# pfSense WebConfigurator address as seen from the public/DMZ subnet.
+pfsense_gui_host          = "10.0.1.1"
+pfsense_gui_port          = 443
+pfsense_tunnel_local_port = 8443

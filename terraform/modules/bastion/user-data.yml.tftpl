@@ -1,0 +1,82 @@
+#cloud-config
+hostname: ${hostname}
+manage_etc_hosts: true
+preserve_hostname: false
+
+users:
+  - name: ${admin_username}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: [sudo]
+    lock_passwd: false
+    plain_text_passwd: ${admin_password}
+    ssh_authorized_keys:
+%{ for key in admin_ssh_keys ~}
+      - ${key}
+%{ endfor ~}
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - ufw
+  - qemu-guest-agent
+  - openssh-client
+  - autossh
+  - tmux
+  - curl
+  - dnsutils
+  - netcat-openbsd
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-nimbus-bastion.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      PasswordAuthentication no
+      PubkeyAuthentication yes
+      PermitRootLogin no
+      AllowTcpForwarding yes
+      GatewayPorts no
+      X11Forwarding no
+      AllowAgentForwarding yes
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+
+  - path: /usr/local/bin/pfsense-gui-check
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      curl -kfsS --connect-timeout 5 "https://${pfsense_gui_host}:${pfsense_gui_port}/" >/dev/null
+      echo "pfSense GUI is reachable from this bastion at https://${pfsense_gui_host}:${pfsense_gui_port}"
+
+  - path: /etc/motd
+    owner: root:root
+    permissions: '0644'
+    content: |
+      Nimbus bastion
+
+      pfSense GUI tunnel from your workstation:
+        ssh -N -L ${tunnel_local_port}:${pfsense_gui_host}:${pfsense_gui_port} ${admin_username}@${hostname}
+
+      Then open:
+        https://localhost:${tunnel_local_port}
+
+      Test pfSense reachability from this host:
+        pfsense-gui-check
+
+runcmd:
+  - systemctl enable --now qemu-guest-agent
+  - systemctl restart ssh
+  - ufw --force reset
+  - ufw default deny incoming
+  - ufw default allow outgoing
+%{ for cidr in ssh_allow_cidrs ~}
+  - ufw allow from ${cidr} to any port 22 proto tcp comment 'SSH to bastion'
+%{ endfor ~}
+  - ufw --force enable
+  - truncate -s 0 /var/log/cloud-init-output.log || true
+
+final_message: "Nimbus bastion bootstrap complete. Use SSH local forwarding for pfSense GUI access."

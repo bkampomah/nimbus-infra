@@ -43,10 +43,10 @@ variable "gateway" {
 }
 
 variable "backends" {
-  description = "List of backend routing rules. Each entry maps a Host header to an upstream server. Path-based ACLs can be added per rule later."
+  description = "List of backend routing rules. Each entry maps one or more Host headers to an upstream server. Separate multiple hostnames in host_match with spaces."
   type = list(object({
     name        = string # internal label (e.g. "nextcloud-aio")
-    host_match  = string # e.g. "cloud.nimbus.local"
+    host_match  = string # e.g. "cloud.nimbus.local cloud.example.com"
     server_ip   = string # e.g. "10.0.10.101"
     server_port = number # e.g. 11000
     check       = optional(bool, true)
@@ -59,6 +59,18 @@ variable "cloudflare_tunnel_token" {
   type        = string
   sensitive   = true
   default     = ""
+}
+
+variable "tls_pem" {
+  description = <<-EOT
+    Combined PEM bundle for the internal HTTPS frontend (server cert + CA chain
+    + private key, concatenated). When non-empty, HAProxy adds a second frontend
+    on the ALB's static IP:443 using this cert, enabling HTTPS for internal clients.
+    Leave empty to keep HTTP-only (Cloudflare tunnel traffic still works on :80).
+  EOT
+  type      = string
+  sensitive = true
+  default   = ""
 }
 
 variable "alb_allow_cidrs" {

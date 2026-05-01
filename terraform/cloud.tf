@@ -26,9 +26,12 @@ module "nimbus_nextcloud" {
 
   nextcloud_admin_pw = var.nextcloud_admin_password
   nextcloud_domain   = var.nextcloud_domain
-  trusted_proxies    = concat(["${var.nimbus_alb_ip}/32"], var.cloudflare_ip_ranges)
-  alb_allow_cidrs    = ["${var.nimbus_alb_ip}/32"]
-  mgmt_allow_cidrs   = var.mgmt_allow_cidrs
+  extra_trusted_domains = [
+    "cloud-app.nimbus.local",
+  ]
+  trusted_proxies  = concat(["${var.nimbus_alb_ip}/32"], var.cloudflare_ip_ranges)
+  alb_allow_cidrs  = ["${var.nimbus_alb_ip}/32"]
+  mgmt_allow_cidrs = var.mgmt_allow_cidrs
 
   db_host     = module.nimbus_rds.host
   db_name     = module.nimbus_rds.initial_db_name

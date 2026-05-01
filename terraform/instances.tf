@@ -13,7 +13,7 @@ locals {
   instances = {
     # ── Public tier ────────────────────────────────────────────────────────
     "${var.company_name}-bastion" = {
-      subnet = "mgmt" # SSH jumpbox; mgmt so sg-ssh rules align
+      subnet = "public" # DMZ workstation/jumpbox for semi-external testing
       cpu    = 1
       ram    = 1024
       disk   = 25

@@ -52,6 +52,16 @@ packages:
   - apt-transport-https
 
 write_files:
+%{ if tls_pem != "" ~}
+  # Internal CA + server cert for the HTTPS frontend (base64 to avoid YAML
+  # indentation issues with PEM block headers). HAProxy reads this before
+  # it chroots, so /etc/haproxy/ is the right home for it.
+  - path: /etc/haproxy/nimbus-alb.pem
+    owner: root:haproxy
+    permissions: '0640'
+    encoding: b64
+    content: ${base64encode(tls_pem)}
+%{ endif ~}
   - path: /etc/haproxy/haproxy.cfg
     owner: root:root
     permissions: '0644'
@@ -70,7 +80,7 @@ write_files:
           daemon
           maxconn 4096
 
-          # Default SSL settings (not used yet - TLS is phase 4c)
+          # SSL settings — used by nimbus-https frontend when tls_pem is set
           ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384
           ssl-default-bind-options ssl-min-ver TLSv1.2 no-tls-tickets
 
@@ -146,6 +156,40 @@ write_files:
 
           default_backend nomatch
 
+%{ if tls_pem != "" ~}
+      # ────────────────────────────────────────────────────────────────────
+      # HTTPS frontend — internal access via self-CA cert
+      # Binds on the ALB's VPC IP only (not loopback) so cloudflared traffic
+      # on :80 is unaffected. Clients with nimbus_ca_cert in their trust
+      # store can access https://cloud.nimbus.local and
+      # https://cloud.nimbusnode.org (split-horizon) without warnings.
+      # ────────────────────────────────────────────────────────────────────
+      frontend nimbus-https
+          bind ${split("/", static_ip)[0]}:443 ssl crt /etc/haproxy/nimbus-alb.pem alpn h2,http/1.1
+          mode http
+
+          capture request header Host len 64
+
+          # Tell backends the original connection was HTTPS so Nextcloud/AIO
+          # generate correct https:// links and don't redirect-loop on return.
+          http-request set-header X-Forwarded-Proto https
+          http-request set-header X-Forwarded-Host %[req.hdr(host)]
+
+          http-response set-header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+          http-response set-header X-Content-Type-Options nosniff
+          http-response set-header X-Frame-Options SAMEORIGIN
+
+%{ for b in backends ~}
+          acl host_${b.name} hdr(host) -i ${b.host_match}
+%{ endfor ~}
+
+%{ for b in backends ~}
+          use_backend ${b.name} if host_${b.name}
+%{ endfor ~}
+
+          default_backend nomatch
+
+%{ endif ~}
       # ────────────────────────────────────────────────────────────────────
       # Backends
       # ────────────────────────────────────────────────────────────────────
@@ -189,6 +233,13 @@ write_files:
 %{ for cidr in alb_allow_cidrs ~}
       ufw allow from ${cidr} to any port 80 proto tcp
 %{ endfor ~}
+
+%{ if tls_pem != "" ~}
+      echo "== Step 3b: HTTPS :443 from Nimbus VPC (internal self-CA)"
+%{ for cidr in alb_allow_cidrs ~}
+      ufw allow from ${cidr} to any port 443 proto tcp
+%{ endfor ~}
+%{ endif ~}
 
       echo "== Step 4: stats :8404 from mgmt only"
 %{ for cidr in mgmt_allow_cidrs ~}

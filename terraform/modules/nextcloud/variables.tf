@@ -53,6 +53,12 @@ variable "nextcloud_domain" {
   default     = "cloud.nimbus.local"
 }
 
+variable "extra_trusted_domains" {
+  description = "Additional hostnames Nextcloud should accept, such as internal test DNS names."
+  type        = list(string)
+  default     = []
+}
+
 variable "trusted_proxies" {
   description = "CIDRs Nextcloud will trust for X-Forwarded-For"
   type        = list(string)
