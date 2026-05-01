@@ -106,7 +106,7 @@ write_files:
       server {
           listen 80 default_server;
           listen [::]:80 default_server;
-          server_name ${nextcloud_domain};
+          server_name %{ for domain in trusted_domains ~}${domain} %{ endfor ~};
 
           # Trust the ALB and (when fronted by Cloudflare Tunnel) Cloudflare's
           # edge IPs. With this, Nextcloud sees the real client IP instead of
@@ -222,7 +222,9 @@ write_files:
         --data-dir="$NC_WEBROOT/data"
 
       # ── Trusted domain + proxy config ──────────────────────────────────────
-      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set trusted_domains 1 --value="${nextcloud_domain}"
+%{ for idx, domain in trusted_domains ~}
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set trusted_domains ${idx} --value="${domain}"
+%{ endfor ~}
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set overwrite.cli.url --value="https://${nextcloud_domain}"
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set overwriteprotocol --value="https"
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set overwritehost --value="${nextcloud_domain}"
@@ -239,7 +241,7 @@ write_files:
       # This is the "S3 Primary" pattern. Nextcloud stores all user files as
       # objects in MinIO, not on local disk. Matches how AWS customers run
       # EFS-less apps with S3 as the data layer.
-      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore class --value='\\OC\\Files\\ObjectStore\\S3'
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore class --value='\OC\Files\ObjectStore\S3'
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments bucket --value='${s3_bucket}'
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments autocreate --value=true --type=boolean
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set objectstore arguments key --value='${s3_access_key}'
