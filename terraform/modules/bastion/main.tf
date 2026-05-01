@@ -26,6 +26,7 @@ resource "proxmox_virtual_environment_file" "user_data" {
       pfsense_gui_host  = var.pfsense_gui_host
       pfsense_gui_port  = var.pfsense_gui_port
       tunnel_local_port = var.tunnel_local_port
+      loki_url          = var.loki_url
     })
   }
 }

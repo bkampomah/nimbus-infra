@@ -37,6 +37,7 @@ resource "proxmox_virtual_environment_file" "user_data" {
       scrape_targets   = var.scrape_targets
       mgmt_allow_cidrs = var.mgmt_allow_cidrs
       loki_allow_cidrs = var.loki_allow_cidrs
+      loki_url         = var.loki_url
     })
   }
 }

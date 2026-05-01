@@ -32,6 +32,7 @@ resource "proxmox_virtual_environment_file" "user_data" {
       alb_allow_cidrs         = var.alb_allow_cidrs
       cloudflare_tunnel_token = var.cloudflare_tunnel_token
       tls_pem                 = var.tls_pem
+      loki_url                = var.loki_url
     })
   }
 }

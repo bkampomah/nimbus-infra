@@ -277,6 +277,105 @@ write_files:
 
       echo "Nextcloud install complete."
 
+  # ── Observability: node-exporter + Promtail ───────────────────────────────
+  - path: /etc/systemd/system/node-exporter.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Prometheus node-exporter
+      After=network.target
+
+      [Service]
+      User=node_exporter
+      Group=node_exporter
+      ExecStart=/usr/local/bin/node_exporter
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/promtail/promtail.yml
+    owner: root:root
+    permissions: '0644'
+    content: |
+      server:
+        http_listen_port: 9080
+        grpc_listen_port: 0
+
+      positions:
+        filename: /var/lib/promtail/positions.yaml
+
+      clients:
+        - url: ${loki_url}/loki/api/v1/push
+
+      scrape_configs:
+        - job_name: system
+          static_configs:
+            - targets: [localhost]
+              labels:
+                host: ${hostname}
+                __path__: /var/log/{syslog,auth.log,nginx/access.log,nginx/error.log}
+
+  - path: /etc/systemd/system/promtail.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Promtail log shipper
+      After=network.target
+
+      [Service]
+      User=promtail
+      Group=promtail
+      ExecStart=/usr/local/bin/promtail -config.file=/etc/promtail/promtail.yml
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /root/install-observability.sh
+    owner: root:root
+    permissions: '0700'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      NODE_EXPORTER_VERSION="1.8.2"
+      PROMTAIL_VERSION="3.1.0"
+
+      if [ ! -f /usr/local/bin/node_exporter ]; then
+        echo "== Installing node-exporter $${NODE_EXPORTER_VERSION}"
+        curl -fsSL -o /tmp/ne.tar.gz \
+          "https://github.com/prometheus/node_exporter/releases/download/v$${NODE_EXPORTER_VERSION}/node_exporter-$${NODE_EXPORTER_VERSION}.linux-amd64.tar.gz"
+        tar -xzf /tmp/ne.tar.gz -C /tmp/
+        cp "/tmp/node_exporter-$${NODE_EXPORTER_VERSION}.linux-amd64/node_exporter" /usr/local/bin/
+        chmod +x /usr/local/bin/node_exporter
+        rm -rf "/tmp/node_exporter-$${NODE_EXPORTER_VERSION}.linux-amd64" /tmp/ne.tar.gz
+      fi
+
+      useradd --system --no-create-home --shell /bin/false node_exporter 2>/dev/null || true
+
+      if [ ! -f /usr/local/bin/promtail ]; then
+        echo "== Installing Promtail $${PROMTAIL_VERSION}"
+        curl -fsSL -o /tmp/promtail.zip \
+          "https://github.com/grafana/loki/releases/download/v$${PROMTAIL_VERSION}/promtail-linux-amd64.zip"
+        unzip -jo /tmp/promtail.zip "promtail-linux-amd64" -d /usr/local/bin/
+        mv /usr/local/bin/promtail-linux-amd64 /usr/local/bin/promtail
+        chmod +x /usr/local/bin/promtail
+        rm -f /tmp/promtail.zip
+      fi
+
+      useradd --system --no-create-home --shell /bin/false promtail 2>/dev/null || true
+      mkdir -p /etc/promtail /var/lib/promtail
+      chown promtail:promtail /var/lib/promtail /etc/promtail
+
+      systemctl daemon-reload
+      systemctl enable --now node-exporter
+      systemctl enable --now promtail
+
 runcmd:
   - [ systemctl, enable, --now, qemu-guest-agent ]
   - [ systemctl, enable, --now, chrony ]
@@ -312,5 +411,9 @@ runcmd:
   - [ systemctl, enable, --now, php8.3-fpm ]
   - [ systemctl, enable, --now, nginx ]
   - [ bash, /root/install-nextcloud.sh ]
+%{ for cidr in mgmt_allow_cidrs ~}
+  - ufw allow from ${cidr} to any port 9100 proto tcp comment 'node-exporter from mon'
+%{ endfor ~}
+  - [ bash, /root/install-observability.sh ]
 
 final_message: "Nimbus Nextcloud node ${hostname} ready after $UPTIME seconds"

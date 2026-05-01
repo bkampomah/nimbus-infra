@@ -63,9 +63,9 @@ resource "tls_cert_request" "nimbus_alb" {
 
   dns_names = [
     "nimbus-alb.nimbus.local",
-    "cloud.nimbus.local",       # legacy AIO path (internal split-horizon)
-    "cloud-app.nimbus.local",   # new Nextcloud path
-    "cloud.nimbusnode.org",     # AIO domain — internal redirect lands here
+    "cloud.nimbus.local",     # legacy AIO path (internal split-horizon)
+    "cloud-app.nimbus.local", # new Nextcloud path
+    "cloud.nimbusnode.org",   # AIO domain — internal redirect lands here
   ]
 
   ip_addresses = [var.nimbus_alb_ip]

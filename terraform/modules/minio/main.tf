@@ -31,6 +31,7 @@ resource "proxmox_virtual_environment_file" "user_data" {
       api_allow_cidrs      = var.api_allow_cidrs
       console_allow_cidrs  = var.console_allow_cidrs
       mgmt_allow_cidrs     = var.mgmt_allow_cidrs
+      loki_url             = var.loki_url
     })
     file_name = "${var.name}-user-data.yml"
   }

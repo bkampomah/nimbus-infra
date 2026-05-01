@@ -36,6 +36,7 @@ module "nimbus_bastion" {
   pfsense_gui_host  = var.pfsense_gui_host
   pfsense_gui_port  = var.pfsense_gui_port
   tunnel_local_port = var.pfsense_tunnel_local_port
+  loki_url          = module.nimbus_mon.loki_url
 }
 
 resource "powerdns_record" "nimbus_bastion" {

@@ -61,3 +61,9 @@ variable "loki_allow_cidrs" {
   type        = list(string)
   default     = ["10.0.0.0/16"]
 }
+
+variable "loki_url" {
+  description = "Promtail push endpoint on nimbus-mon (e.g. http://10.0.100.20:3100). Empty string disables Promtail."
+  type        = string
+  default     = "http://10.0.100.20:3100"
+}

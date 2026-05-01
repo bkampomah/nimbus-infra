@@ -42,6 +42,7 @@ module "nimbus_nextcloud" {
   s3_bucket     = module.nimbus_s3.default_bucket
   s3_access_key = var.nextcloud_s3_access_key
   s3_secret_key = var.nextcloud_s3_secret_key
+  loki_url      = module.nimbus_mon.loki_url
 }
 
 resource "powerdns_record" "cloud_app" {

@@ -51,9 +51,11 @@ resource "proxmox_virtual_environment_file" "user_data" {
       admin_ssh_keys    = var.admin_ssh_keys
       api_key           = random_password.api_key.result
       api_allow_cidrs   = var.api_allow_cidrs
+      mgmt_allow_cidrs  = var.mgmt_allow_cidrs
       recursor_forwards = var.recursor_forwards
       upstream_dns      = var.upstream_dns
       internal_zones    = var.internal_zones
+      loki_url          = var.loki_url
     })
   }
 }

@@ -25,6 +25,7 @@ module "nimbus_mon" {
 
   mgmt_allow_cidrs = var.mgmt_allow_cidrs
   loki_allow_cidrs = [var.vpc_cidr]
+  loki_url         = module.nimbus_mon.loki_url
 
   scrape_targets = [
     {
@@ -34,14 +35,14 @@ module "nimbus_mon" {
     {
       name = "node-exporter"
       targets = [
-        "${var.nimbus_alb_ip}:9100",       # nimbus-alb
-        "${var.nimbus_bastion_ip}:9100",   # nimbus-bastion
-        "${var.nimbus_cloud_ip}:9100",     # nimbus-cloud-01
-        "${var.nimbus_rds_ip}:9100",       # nimbus-rds
-        "${var.nimbus_s3_ip}:9100",        # nimbus-s3
+        "${var.nimbus_alb_ip}:9100",     # nimbus-alb
+        "${var.nimbus_bastion_ip}:9100", # nimbus-bastion
+        "${var.nimbus_cloud_ip}:9100",   # nimbus-cloud-01
+        "${var.nimbus_rds_ip}:9100",     # nimbus-rds
+        "${var.nimbus_s3_ip}:9100",      # nimbus-s3
         # nimbus-dns IP is embedded in the static_ip var (strip /24)
         "${split("/", var.nimbus_dns_static_ip)[0]}:9100",
-        "localhost:9100",                  # nimbus-mon itself
+        "localhost:9100", # nimbus-mon itself
       ]
     },
     {

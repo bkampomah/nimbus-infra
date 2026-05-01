@@ -68,9 +68,9 @@ variable "tls_pem" {
     on the ALB's static IP:443 using this cert, enabling HTTPS for internal clients.
     Leave empty to keep HTTP-only (Cloudflare tunnel traffic still works on :80).
   EOT
-  type      = string
-  sensitive = true
-  default   = ""
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 variable "alb_allow_cidrs" {
@@ -83,4 +83,10 @@ variable "mgmt_allow_cidrs" {
   description = "CIDRs allowed to hit the HAProxy stats page on :8404. Keep tight - mgmt subnet and localhost only."
   type        = list(string)
   default     = ["10.0.100.0/24", "127.0.0.1/32"]
+}
+
+variable "loki_url" {
+  description = "Promtail push endpoint on nimbus-mon (e.g. http://10.0.100.20:3100). Empty string disables Promtail."
+  type        = string
+  default     = "http://10.0.100.20:3100"
 }

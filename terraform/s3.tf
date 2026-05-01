@@ -58,6 +58,7 @@ module "nimbus_s3" {
   api_allow_cidrs     = [var.vpc_cidr]
   console_allow_cidrs = concat(var.mgmt_allow_cidrs, ["192.168.1.0/24"])
   mgmt_allow_cidrs    = var.mgmt_allow_cidrs
+  loki_url            = module.nimbus_mon.loki_url
 }
 
 # Internal DNS ----------------------------------------------------------------

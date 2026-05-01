@@ -54,6 +54,9 @@ module "nimbus_rds" {
   s3_access_key = module.nimbus_s3.pgbackup_access_key
   s3_secret_key = module.nimbus_s3.pgbackup_secret_key
   s3_bucket     = "pg-backups"
+
+  mgmt_allow_cidrs = var.mgmt_allow_cidrs
+  loki_url         = module.nimbus_mon.loki_url
 }
 
 # Internal DNS ----------------------------------------------------------------

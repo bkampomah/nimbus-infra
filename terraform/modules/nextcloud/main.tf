@@ -79,6 +79,7 @@ resource "proxmox_virtual_environment_file" "user_data" {
       s3_bucket          = var.s3_bucket
       s3_access_key      = var.s3_access_key
       s3_secret_key      = var.s3_secret_key
+      loki_url           = var.loki_url
     })
   }
 }

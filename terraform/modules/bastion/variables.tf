@@ -121,3 +121,9 @@ variable "admin_ssh_keys" {
   description = "List of SSH public keys for admin user"
   type        = list(string)
 }
+
+variable "loki_url" {
+  description = "Promtail push endpoint on nimbus-mon (e.g. http://10.0.100.20:3100). Empty string disables Promtail."
+  type        = string
+  default     = "http://10.0.100.20:3100"
+}

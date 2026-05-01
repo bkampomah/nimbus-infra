@@ -28,7 +28,7 @@ module "nimbus_alb" {
   backends = [
     {
       name        = "nextcloud-aio"
-      host_match  = "cloud.nimbus.local"   # internal only; public traffic migrated to cloud-01
+      host_match  = "cloud.nimbus.local" # internal only; public traffic migrated to cloud-01
       server_ip   = var.nimbus_aio_ip
       server_port = 11000
       check       = true
@@ -45,6 +45,7 @@ module "nimbus_alb" {
   alb_allow_cidrs         = [var.vpc_cidr]
   mgmt_allow_cidrs        = var.mgmt_allow_cidrs
   cloudflare_tunnel_token = var.cloudflare_tunnel_token
+  loki_url                = module.nimbus_mon.loki_url
 
   # Combined PEM bundle (server cert + CA chain + private key) for the internal
   # HTTPS frontend. HAProxy binds :443 on the ALB's VPC IP and uses this cert.

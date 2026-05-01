@@ -30,7 +30,9 @@ module "nimbus_dns" {
   upstream_dns   = ["1.1.1.1", "9.9.9.9"]
   internal_zones = ["nimbus.local", "nimbusnode.org"]
 
-  api_allow_cidrs = var.mgmt_allow_cidrs
+  api_allow_cidrs  = var.mgmt_allow_cidrs
+  mgmt_allow_cidrs = var.mgmt_allow_cidrs
+  loki_url         = module.nimbus_mon.loki_url
 }
 
 provider "powerdns" {
@@ -47,7 +49,7 @@ resource "powerdns_record" "infra" {
     "nimbus-cloud-aio.nimbus.local." = var.nimbus_aio_ip
     # New Nextcloud app-tier internal hostname — ALB routes by Host header
     # to the nextcloud-cloud backend (nimbus-cloud-01 on :80).
-    "cloud-app.nimbus.local."        = var.nimbus_alb_ip
+    "cloud-app.nimbus.local." = var.nimbus_alb_ip
   }
 
   zone    = "nimbus.local."

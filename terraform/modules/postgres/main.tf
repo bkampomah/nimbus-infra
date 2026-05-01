@@ -38,10 +38,12 @@ resource "proxmox_virtual_environment_file" "user_data" {
       allowed_cidr    = var.allowed_cidr
 
       # MinIO targets for the pg-backup push step
-      s3_endpoint   = var.s3_endpoint
-      s3_access_key = var.s3_access_key
-      s3_secret_key = var.s3_secret_key
-      s3_bucket     = var.s3_bucket
+      s3_endpoint      = var.s3_endpoint
+      s3_access_key    = var.s3_access_key
+      s3_secret_key    = var.s3_secret_key
+      s3_bucket        = var.s3_bucket
+      mgmt_allow_cidrs = var.mgmt_allow_cidrs
+      loki_url         = var.loki_url
     })
   }
 }
