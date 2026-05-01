@@ -87,10 +87,11 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 - All VM A records managed by Terraform via `pan-net/powerdns` provider
 - Split-horizon: `cloud.nimbusnode.org` resolves to ALB internally, Cloudflare externally
 
-### ✅ Phase 4 — Load balancer
-- nimbus-alb deployed (HAProxy 2.8 in public subnet)
-- Backends: `nextcloud-aio` (internal only), `nextcloud-cloud` (nimbus-cloud-01)
-- `:80` HTTP frontend for cloudflared; `:443` HTTPS with SNI cert selection
+### ✅ Phase 4 — Load balancer (see ARCHITECTURE.md §15 for build guide)
+- **4a** *(Medium)* — Split `compute.tf` into scoped files; delete Proxmox SG resources in favour of UFW; fix MinIO disk default
+- **4b** *(Medium)* — `modules/haproxy/` written; nimbus-alb deployed with cloud-init; verified on `:80`
+- **4c** *(Easy)* — HAProxy frontend + AIO backend configured; `cloud.nimbus.local` DNS flipped from AIO → ALB
+- **4d** *(Trivial)* — Split-horizon verified; traffic flow documented; `phase-4-complete` tagged
 
 ### ✅ Phase 5 — Data + App Tier (see ARCHITECTURE.md §15 for complexity guide)
 - **5a** *(Medium)* — PostgreSQL module: pg_hba, listen_addresses, pgbackrest → MinIO WAL archive

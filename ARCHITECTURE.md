@@ -226,7 +226,76 @@ Nimbus runs a **step-ca** internal Certificate Authority for TLS on `*.nimbus.lo
 
 ---
 
-## 15. Phase 5 — Data + App Tier Build Guide
+## 15. Phase 4 — Load Balancer Build Guide
+
+Phase 4 introduces the ALB tier and routes internal traffic through it before any public Nextcloud work starts. The sub-phases are ordered so each one is independently verifiable before you move on.
+
+| Sub-phase | What                          | Complexity | Why                                                             |
+|-----------|-------------------------------|------------|-----------------------------------------------------------------|
+| 4a        | Strip and re-enable files     | Medium     | Restructuring TF layout + the SG→UFW trade-off needs a decision |
+| 4b        | Build nimbus-alb VM           | Medium     | Writing the HAProxy cloud-init module from scratch              |
+| 4c        | Route cloud.nimbus.local → ALB | Easy      | Config change + one DNS record; same pattern as before          |
+| 4d        | Cleanup                       | Trivial    | Verify, document, tag                                           |
+
+### 4a — Strip and re-enable files (Medium)
+
+`compute.tf` was a catch-all that grew unwieldy. Split it into purpose-scoped files:
+
+- `alb.tf` — HAProxy load balancer
+- `bastion.tf` — DMZ jumpbox
+- `web.tf` — app-tier web VMs (placeholder for future services)
+- `mon.tf` — observability VM (placeholder)
+
+The more important change is **deleting the Proxmox firewall security group resources from `network.tf`** and relying on UFW in cloud-init instead. Why:
+
+- Proxmox firewall security groups require the firewall to be enabled at the datacenter level, which has side-effects on other VMs and Proxmox itself.
+- UFW rules live in the same cloud-init template as the service they protect — they travel with the VM and are visible in the repo.
+- This matches how AWS shops often handle instance-level firewall rules separately from VPC-level ACLs.
+
+Also fix the MinIO module default data disk size during this phase while the codebase is in motion — cheaper to do it now than to come back later when a running VM is attached.
+
+### 4b — Build nimbus-alb VM (Medium)
+
+Write `modules/haproxy/` from scratch. The module's cloud-init file installs HAProxy, writes `haproxy.cfg`, and enables it on boot. Apply with a target so only this resource is created:
+
+```bash
+terraform apply -target=module.nimbus_alb
+```
+
+Verify before touching DNS:
+
+```bash
+curl -v http://10.0.1.10/
+# Expect: HAProxy stub 503 (no backend yet — that's correct at this stage)
+```
+
+The cloud-init approach means the config is in the repo and version-controlled. The alternative (SSH in and write the config manually) would be faster once but untrackable.
+
+### 4c — Route cloud.nimbus.local through ALB (Easy)
+
+Two changes, both low-risk:
+
+1. **HAProxy config:** add a frontend on `:80` with an ACL matching `Host: cloud.nimbus.local`, pointing to the AIO backend at `10.0.10.101:11000`.
+2. **PowerDNS record:** change `cloud.nimbus.local` A record from `10.0.10.101` (AIO direct) to `10.0.1.10` (ALB).
+
+Apply the DNS record via Terraform (`terraform apply` — only the `powerdns_record` resource changes). Verify with:
+
+```bash
+curl -H "Host: cloud.nimbus.local" http://10.0.1.10/
+# Expect: AIO Nextcloud content proxied through HAProxy
+```
+
+This is the "put the load balancer in front without breaking anything" step. The Cloudflare Tunnel still points at AIO directly at this point — external traffic is unaffected.
+
+### 4d — Cleanup (Trivial)
+
+- Confirm split-horizon still works: internal `cloud.nimbus.local` resolves to ALB; Cloudflare external traffic still reaches AIO via its own tunnel.
+- Document the traffic flow (see ARCHITECTURE.md §11).
+- `git tag phase-4-complete && git push --tags`
+
+---
+
+## 16. Phase 5 — Data + App Tier Build Guide
 
 Phase 5 is where the abstract AWS analogies become concrete. The sub-phases below are ordered by dependency, not difficulty. Do them in sequence.
 
@@ -273,7 +342,7 @@ Update the Cloudflare CNAME for `cloud.nimbusnode.org` to point at the new Cloud
 
 ---
 
-## 16. Observability
+## 17. Observability
 
 | AWS              | Nimbus (planned)                            |
 |------------------|---------------------------------------------|
@@ -287,7 +356,7 @@ Not yet deployed. Planned for a dedicated `nimbus-mon` VM in the mgmt subnet.
 
 ---
 
-## 16. IAM
+## 18. IAM
 
 Planned: **Keycloak** for users/groups/roles + OIDC, and **HashiCorp Vault** for secrets/dynamic DB creds. Together they're the closest FOSS analog to IAM + Secrets Manager + STS.
 
