@@ -67,6 +67,7 @@ resource "proxmox_virtual_environment_file" "user_data" {
       admin_ssh_keys     = var.admin_ssh_keys
       nextcloud_admin_pw = var.nextcloud_admin_pw
       nextcloud_domain   = var.nextcloud_domain
+      trusted_domains    = distinct(concat([var.nextcloud_domain], var.extra_trusted_domains))
       trusted_proxies    = var.trusted_proxies
       alb_allow_cidrs    = var.alb_allow_cidrs
       mgmt_allow_cidrs   = var.mgmt_allow_cidrs
@@ -137,9 +138,10 @@ resource "proxmox_virtual_environment_vm" "nextcloud" {
   lifecycle {
     ignore_changes = [
       initialization[0].user_account,
-      # bpg/proxmox forces VM replace when user_data_file_id changes.
-      # Ignore so template updates don't rebuild running VMs.
+      # bpg/proxmox forces VM replace when ip_config or user_data_file_id changes.
+      # Ignore both so IP and template updates don't rebuild running VMs.
       # To intentionally rebuild: terraform apply -replace=module.nimbus_nextcloud.proxmox_virtual_environment_vm.cloud
+      initialization[0].ip_config,
       initialization[0].user_data_file_id,
     ]
   }
