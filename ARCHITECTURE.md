@@ -76,7 +76,7 @@ pfSense interfaces:
 - `LAN_MGMT` → `nimbus-mgmt` (10.0.100.1/24)
 
 **NAT rule (outbound):** Hybrid outbound NAT, map `10.0.0.0/16` → WAN.
-**Firewall (inbound WAN):** Default deny, then port-forward 80/443 → `nimbus-alb`.
+**Firewall (inbound WAN):** Default deny. External traffic arrives via Cloudflare Tunnel (cloudflared on nimbus-alb) — no public ports exposed on pfSense.
 
 ---
 
@@ -97,20 +97,18 @@ Private subnets simply don't get a route to `0.0.0.0/0` except through NAT — w
 - **NACL:** Stateless, attached to a subnet, evaluated in rule order, default-allow.
 
 **Nimbus:**
-- **SG equivalent:** Proxmox firewall at the **VM level** (`Datacenter → VM → Firewall`). Stateful. Use **security groups** (yes, Proxmox literally calls them that) to reuse rule sets across VMs — e.g. `sg-web`, `sg-db`, `sg-ssh-from-bastion`.
+- **SG equivalent:** UFW on each VM (enforced in cloud-init), plus Proxmox firewall at the **VM level**. Stateful. UFW rules are per-VM and scoped to the minimum required ports.
 - **NACL equivalent:** Proxmox firewall at the **datacenter or node level**. Useful for "block this bad CIDR everywhere, no exceptions."
 
-Example security groups for Nimbus:
-
-| SG name             | Purpose                      | Inbound rules                              |
-|---------------------|------------------------------|--------------------------------------------|
-| `sg-nimbus-web`     | Attached to web/api VMs      | 80,443 from `sg-nimbus-alb`                |
-| `sg-nimbus-alb`     | Attached to load balancer    | 80,443 from `0.0.0.0/0`                    |
-| `sg-nimbus-db`      | Attached to nimbus-rds       | 5432 from `sg-nimbus-web`                  |
-| `sg-nimbus-ssh`     | Attached to everything       | 22 from `10.0.100.0/24` (mgmt only)        |
-| `sg-nimbus-bastion` | Attached to nimbus-bastion   | 22 from your home/office public IP         |
-
-This is defined in `terraform/network.tf`.
+Current UFW policy on each VM:
+| VM               | Allowed inbound                                      |
+|------------------|------------------------------------------------------|
+| nimbus-alb       | :80/:443 from VPC; :8404 stats from mgmt; :22 mgmt  |
+| nimbus-cloud-01  | :80 from ALB only; :22 from mgmt                    |
+| nimbus-rds       | :5432 from app subnet; :22 from mgmt                |
+| nimbus-s3        | :9000/:9001 from app+data; :22 from mgmt            |
+| nimbus-dns       | :53 from VPC; :8081 API from mgmt; :22 from mgmt   |
+| nimbus-bastion   | :22 from home/office LAN                            |
 
 ---
 
@@ -119,11 +117,11 @@ This is defined in `terraform/network.tf`.
 **AWS:** You launch an instance from an AMI with a user-data script; it boots with cloud-init, gets an IP from the subnet, comes up with your SSH key.
 
 **Nimbus:** Identical flow.
-1. Build a template VM (`vmid 9000`) from the Ubuntu cloud image — this is your AMI.
+1. Build a template VM (`vmid 9000`) from the Ubuntu 24.04 cloud image — this is your AMI.
 2. Terraform clones it for each new instance and injects cloud-init user-data.
-3. VM boots, DHCP from pfSense, cloud-init runs, your SSH key is in `~Nimbus/.ssh/authorized_keys`.
+3. VM boots, gets static IP from cloud-init netplan config, cloud-init runs, SSH key is in `~/.ssh/authorized_keys`.
 
-The cloud-init file in `cloud-init/user-data.yml.tftpl` is a template — Terraform interpolates hostname and SSH keys per-VM.
+Each service lives in its own Terraform module under `terraform/modules/` with a `user-data.yml.tftpl` that installs and configures the service on first boot.
 
 ---
 
@@ -134,43 +132,103 @@ The cloud-init file in `cloud-init/user-data.yml.tftpl` is a template — Terraf
 | EBS      | Proxmox disk on ZFS / Ceph / LVM-thin       |
 | EBS snap | Proxmox snapshot                            |
 | EFS      | NFS share from a dedicated VM or TrueNAS    |
-| S3       | MinIO (S3-compatible API, supports IAM/STS) |
+| S3       | MinIO (`nimbus-s3`, 10.0.20.101)            |
 
-MinIO is a drop-in for 99% of S3 SDK code. Run it as a single node for lab, or 4-node erasure-coded for "production-ish."
+**nimbus-s3** runs MinIO single-node on a dedicated data disk. Nextcloud uses it as Primary Object Storage — all user files are stored as S3 objects, not on local disk. This mirrors the EFS-less S3-native pattern common in AWS-hosted Nextcloud deployments.
+
+Backups: `pgbackrest` on nimbus-rds pushes PostgreSQL WAL and base backups to a dedicated MinIO bucket on nimbus-s3.
 
 ---
 
 ## 9. RDS
 
-PostgreSQL 16 on a dedicated Ubuntu VM in `nimbus-data` subnet. Backups via `pgbackrest` pushed to the MinIO bucket — that mirrors how RDS automated backups land in S3 under the hood.
+**nimbus-rds** (`10.0.20.103`) runs PostgreSQL 16 on Ubuntu 24.04 in the data subnet.
 
-Once you're comfortable, graduate to **CloudNativePG** on a small k3s cluster for real HA + point-in-time recovery.
+- Nextcloud's database lives here (`nextcloud` DB, `nextcloud` user).
+- Backups: `pgbackrest` pushes to MinIO.
+- Graduate path: **CloudNativePG** on a small k3s cluster for real HA + PITR.
 
 ---
 
 ## 10. Route 53
 
-**PowerDNS** with the `gpgsql` backend for authoritative zones, and the recursor for `.` resolution.
+**nimbus-dns** (`10.0.100.10`) runs **PowerDNS** with the `gpgsql` backend (authoritative) and the recursor for `.` resolution.
 
-- Authoritative zone: `nimbus.local` (A records for every VM, managed via the PowerDNS API from Terraform using the `pan-net/pdns` provider).
-- Split-horizon optional: serve different answers to internal vs external clients.
+Zones managed by Terraform via the `pan-net/powerdns` provider:
 
----
+| Zone             | Purpose                                                  |
+|------------------|----------------------------------------------------------|
+| `nimbus.local.`  | Internal A records for every VM; split-horizon internal  |
+| `nimbusnode.org.`| Internal override for the public domain (split-horizon)  |
 
-## 11. Load Balancers
-
-**AWS ALB → HAProxy or Traefik** on `nimbus-alb` in the public subnet.
-
-- HAProxy: closer to how ALB/NLB feel, config file in repo.
-- Traefik: declarative, pulls labels from Docker/k8s, closer to "ALB + Ingress Controller" combined.
-
-Pick one, commit its config.
+Split-horizon for `cloud.nimbusnode.org`: internal clients resolve to `nimbus-alb` (10.0.1.10); external clients resolve via Cloudflare's public DNS (CNAME to the Cloudflare Tunnel).
 
 ---
 
-## 12. Observability
+## 11. Load Balancer
 
-| AWS              | Nimbus                                      |
+**nimbus-alb** (`10.0.1.10`) runs **HAProxy 2.8** in the public subnet.
+
+**Frontends:**
+- `:80` — plain HTTP. Used by cloudflared (Cloudflare Tunnel) which runs on this host. Backends are selected by `Host` header.
+- `:443` — HTTPS with SNI cert selection from `/etc/haproxy/certs/`. HAProxy picks the right cert automatically based on SNI. Backends share the same ACLs as :80.
+
+**TLS certificates:**
+- `*.nimbusnode.org` — Let's Encrypt wildcard, issued via acme.sh + Cloudflare DNS-01. Auto-renews via deploy hook.
+- `*.nimbus.local` — Internal wildcard from Nimbus step-ca (valid 90 days, renew with `step ca renew`).
+
+**Backends:**
+| Backend             | Host match                              | Upstream               |
+|---------------------|-----------------------------------------|------------------------|
+| `nextcloud-aio`     | `cloud.nimbus.local`                    | 10.0.10.101:11000      |
+| `nextcloud-cloud`   | `cloud-app.nimbus.local`, `cloud.nimbusnode.org` | 10.0.10.102:80 |
+
+**Cloudflare Tunnel:** cloudflared runs on nimbus-alb as a systemd service, connecting to the Cloudflare edge over HTTP/2 (TCP, avoids pfSense QUIC/UDP timeouts). The tunnel routes `cloud.nimbusnode.org` → `http://10.0.10.102:80` directly, bypassing HAProxy for external traffic.
+
+---
+
+## 12. Nextcloud (Primary App)
+
+**nimbus-cloud-01** (`10.0.10.102`) runs **Nextcloud 30.0.17** in the app subnet.
+
+Stack: nginx → PHP-FPM 8.3 → PostgreSQL (nimbus-rds) + MinIO (nimbus-s3 as S3 Primary Object Storage).
+
+Public URL: `https://cloud.nimbusnode.org` (Cloudflare Tunnel → nimbus-cloud-01).
+Internal URL: `https://cloud-app.nimbus.local` (HAProxy :443 → nimbus-cloud-01).
+
+Key config decisions:
+- MinIO uses path-style addressing (`use_path_style = true`) — MinIO doesn't support virtual-hosted-style URLs.
+- MinIO region is `us-east-1` (required non-empty by Nextcloud's S3 client; ignored by MinIO).
+- `overwriteprotocol = https` and `overwritehost = cloud.nimbusnode.org` so links generated server-side use the correct public URL even though nginx only speaks HTTP.
+- Trusted proxies include the ALB IP and all Cloudflare IPv4 ranges so `X-Forwarded-For` is respected.
+
+---
+
+## 13. Bastion
+
+**nimbus-bastion** (`10.0.1.20`) is a lightweight Ubuntu VM in the public subnet used as a DMZ jumpbox. Primarily useful for reaching the pfSense WebConfigurator via SSH tunnel from your workstation without opening pfSense to the internet.
+
+```bash
+# Tunnel pfSense GUI to localhost:8443
+ssh -L 8443:10.0.1.1:443 nimbus@10.0.1.20
+# Then browse to https://localhost:8443
+```
+
+---
+
+## 14. Internal CA
+
+Nimbus runs a **step-ca** internal Certificate Authority for TLS on `*.nimbus.local` services.
+
+- CA cert: `terraform/nimbus-ca.crt` (import into browser / system trust store for warning-free internal HTTPS)
+- Server cert: `*.nimbus.local` wildcard, 90-day validity, deployed to HAProxy
+- Renewal: manual for now — `step ca renew /etc/haproxy/certs/wildcard-nimbus-local.pem /etc/haproxy/certs/wildcard-nimbus-local.key` then reload haproxy
+
+---
+
+## 15. Observability
+
+| AWS              | Nimbus (planned)                            |
 |------------------|---------------------------------------------|
 | CloudWatch Metrics | Prometheus scraping `node-exporter`       |
 | CloudWatch Logs    | Loki + Promtail                           |
@@ -178,12 +236,12 @@ Pick one, commit its config.
 | X-Ray              | Tempo or Jaeger (optional)                |
 | CloudTrail         | Proxmox audit log shipped into Loki       |
 
-All on `nimbus-mon` in the mgmt subnet.
+Not yet deployed. Planned for a dedicated `nimbus-mon` VM in the mgmt subnet.
 
 ---
 
-## 13. IAM
+## 16. IAM
 
-Run **Keycloak** for users/groups/roles + OIDC, and **HashiCorp Vault** for secrets/dynamic DB creds. Together they're the closest FOSS analog to IAM + Secrets Manager + STS.
+Planned: **Keycloak** for users/groups/roles + OIDC, and **HashiCorp Vault** for secrets/dynamic DB creds. Together they're the closest FOSS analog to IAM + Secrets Manager + STS.
 
 This is the last phase to tackle — it's the most conceptually loaded piece and easier once the rest of the stack is concrete.

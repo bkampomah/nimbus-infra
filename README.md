@@ -1,190 +1,163 @@
 # Nimbus — AWS-Style Network on Proxmox
 
-A learning project that recreates an AWS-style multi-tier network (VPC, subnets, security groups, EC2, ELB, RDS, S3, Route 53) on a Proxmox cluster, managed as code with Terraform and GitOps'd through GitHub Actions.
+A learning project that recreates an AWS-style multi-tier network (VPC, subnets, security groups, EC2, ELB, RDS, S3, Route 53) on a Proxmox cluster, managed as code with Terraform.
 
-> **Credentials (lab only):** username `Nimbus` / password `changeme`.
-> `changeme` is fine for a throwaway lab, but switch to SSH keys and rotate the password before exposing anything to the internet. Cloud-init in this repo provisions both so you can SSH in immediately and harden later.
+> **Credentials (lab only):** admin username `nimbus`, password in `terraform.tfvars` (`admin_password`). Nextcloud admin password is `nextcloud_admin_password`. Switch to SSH keys and rotate before exposing anything beyond Cloudflare Tunnel.
 
 ---
 
-## 1. What you'll build
-
-A single Proxmox node (or cluster) hosting a virtual "AWS region" called **Nimbus**, with one VPC, a public tier, two private tiers, and the core services that sit on top.
+## Current state
 
 ```
-                 ┌────────────────────────────────────────────┐
- Internet ──┐    │  Proxmox host(s) — "nimbus-region-1"       │
-            │    │                                            │
-            ▼    │   ┌──────────── Nimbus VPC (10.0.0.0/16) ──┼──┐
-       ┌────────┴─┐  │                                        │  │
-       │ pfSense  │  │  Public subnet   10.0.1.0/24           │  │
-       │ (IGW/NAT)│──┤    ├─ nimbus-alb   (HAProxy / Traefik) │  │
-       └──────────┘  │    └─ nimbus-bastion                   │  │
-                     │                                        │  │
-                     │  Private-app     10.0.10.0/24          │  │
-                     │    ├─ nimbus-web-01 / 02  (EC2-like)   │  │
-                     │    └─ nimbus-api-01 / 02               │  │
-                     │                                        │  │
-                     │  Private-data    10.0.20.0/24          │  │
-                     │    ├─ nimbus-rds  (PostgreSQL)         │  │
-                     │    └─ nimbus-s3   (MinIO)              │  │
-                     │                                        │  │
-                     │  Management      10.0.100.0/24         │  │
-                     │    ├─ nimbus-dns  (PowerDNS) = Route53 │  │
-                     │    └─ nimbus-mon  (Prom/Grafana/Loki)  │  │
-                     └────────────────────────────────────────┘  │
-                                                                 │
-                        GitHub ── Actions ── Terraform ──────────┘
+                 ┌─────────────────────────────────────────────────┐
+ Internet        │  Proxmox host — "nimbus-region-1"               │
+    │            │                                                 │
+    ▼            │   ┌──────────── Nimbus VPC (10.0.0.0/16) ───────┼──┐
+ Cloudflare      │   │                                             │  │
+ Tunnel ─────────┼───► Public subnet   10.0.1.0/24                │  │
+    │            │   │   ├─ nimbus-alb      10.0.1.10  (HAProxy)  │  │
+    ▼            │   │   └─ nimbus-bastion  10.0.1.20  (jumpbox)  │  │
+ nimbus-alb      │   │                                             │  │
+    │            │   │  App subnet      10.0.10.0/24              │  │
+    ▼            │   │   └─ nimbus-cloud-01 10.0.10.102 (Nextcloud)│  │
+nimbus-cloud-01  │   │                                             │  │
+                 │   │  Data subnet     10.0.20.0/24              │  │
+                 │   │   ├─ nimbus-rds    10.0.20.103 (PostgreSQL) │  │
+                 │   │   └─ nimbus-s3    10.0.20.101  (MinIO)     │  │
+                 │   │                                             │  │
+                 │   │  Mgmt subnet     10.0.100.0/24             │  │
+                 │   │   └─ nimbus-dns   10.0.100.10  (PowerDNS)  │  │
+                 │   └─────────────────────────────────────────────┘  │
+                 └─────────────────────────────────────────────────────┘
+
+ pfSense (IGW/NAT) sits at each subnet gateway (.1 of each /24)
 ```
+
+**Public access:** `https://cloud.nimbusnode.org` → Cloudflare Tunnel → nimbus-cloud-01:80
+
+**Internal access:** `https://cloud-app.nimbus.local` → nimbus-alb:443 (step-ca TLS) → nimbus-cloud-01:80
 
 See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 
 ---
 
-## 2. AWS → Proxmox/FOSS service map (short version)
+## AWS → Proxmox/FOSS service map
 
-| AWS                 | Nimbus equivalent                             |
-|---------------------|-----------------------------------------------|
-| Region / AZ         | Proxmox datacenter / node                     |
-| VPC                 | Proxmox SDN Zone (type: `simple` or `vlan`)   |
-| Subnet              | SDN VNet + subnet                             |
-| Internet Gateway    | pfSense/OPNsense WAN interface                |
-| NAT Gateway         | pfSense outbound NAT                          |
-| Route Table         | pfSense / SDN routes                          |
-| Security Group      | Proxmox firewall (VM-level, stateful)         |
-| Network ACL         | Proxmox firewall (datacenter/node-level)      |
-| EC2 instance        | Proxmox VM (cloud-init enabled)               |
-| AMI                 | Proxmox VM template from cloud image          |
-| EBS volume          | Proxmox disk on ZFS / Ceph / LVM-thin         |
-| S3                  | MinIO                                         |
-| RDS                 | PostgreSQL VM (or CloudNativePG on k8s later) |
-| Route 53            | PowerDNS (auth + recursor)                    |
-| ELB / ALB           | HAProxy or Traefik                            |
-| IAM                 | Keycloak + HashiCorp Vault                    |
-| CloudWatch          | Prometheus + Grafana + Loki                   |
-| CloudTrail          | Proxmox audit log shipped to Loki             |
-
----
-
-## 3. Phased plan
-
-### Phase 0 — Prereqs (manual, one-time)
-
-1. Proxmox VE 8.x installed, reachable on your LAN.
-2. Create a Proxmox API token for Terraform (see §5).
-3. Create GitHub repo `nimbus-infra` and add secrets (see §6).
-4. Download an Ubuntu 24.04 cloud image on the Proxmox host:
-   ```bash
-   cd /var/lib/vz/template/iso
-   wget https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
-   ```
-5. Install on your workstation: `terraform >= 1.7`, `git`, `ssh-keygen`.
-
-### Phase 1 — Network foundation (the "VPC")
-
-- Configure Proxmox SDN manually the first time (bpg/proxmox Terraform provider SDN support is still evolving; doing it by hand once makes the mental model stick).
-  - SDN Zone: `nimbus-vpc` (type `simple`)
-  - VNets: `nimbus-public`, `nimbus-app`, `nimbus-data`, `nimbus-mgmt`
-  - Subnets as diagrammed above
-- Deploy pfSense as the VPC edge (Internet Gateway + NAT Gateway). Give it one NIC per VNet plus one on your real LAN bridge (`vmbr0`).
-- Codify firewall rules (your "security groups") in Terraform using `proxmox_virtual_environment_firewall_*` resources.
-
-### Phase 2 — Golden image (the "AMI")
-
-- Build a reusable Ubuntu 24.04 cloud-init template VM (ID 9000).
-- Snapshot it. Every EC2-equivalent VM clones from this template.
-- Commit the `cloud-init/user-data.yml.tftpl` so the template is reproducible.
-
-### Phase 3 — Compute (the "EC2 fleet")
-
-- Terraform module `modules/compute` that wraps `proxmox_virtual_environment_vm` and takes: name, subnet, cpu, ram, disk, tags, SSH keys.
-- Stand up: bastion (public), 2× web + 2× api (private-app), db (private-data).
-
-### Phase 4 — Managed services
-
-- `nimbus-rds`: PostgreSQL 16 on Ubuntu, backups to MinIO.
-- `nimbus-s3`: MinIO single-node or 4-node erasure-coded.
-- `nimbus-alb`: HAProxy with cert-manager-style Let's Encrypt via Caddy, OR Traefik if you prefer declarative.
-- `nimbus-dns`: PowerDNS authoritative for `nimbus.local`, forwarder for external.
-
-### Phase 5 — Observability (the "CloudWatch")
-
-- Prometheus + node-exporter on each VM.
-- Grafana dashboards committed as JSON in the repo.
-- Loki + Promtail for logs; ship Proxmox `/var/log/pveproxy/access.log` as your CloudTrail.
-
-### Phase 6 — GitOps lifecycle
-
-- `main` branch = prod state; PRs run `terraform plan` and post the diff as a comment.
-- Merging to `main` runs `terraform apply` with approval.
-- State stored remotely (recommend Terraform Cloud free tier, or MinIO+DynamoDB-style locking via `nimbus-s3` once it exists — chicken-and-egg: bootstrap locally, migrate later).
+| AWS                 | Nimbus equivalent                             | Status   |
+|---------------------|-----------------------------------------------|----------|
+| Region / AZ         | Proxmox datacenter / node                     | ✅       |
+| VPC                 | Proxmox SDN Zone (`nimbus-vpc`, 10.0.0.0/16)  | ✅       |
+| Subnet              | SDN VNet + subnet (4 tiers)                   | ✅       |
+| Internet Gateway    | pfSense WAN interface                         | ✅       |
+| NAT Gateway         | pfSense outbound NAT                          | ✅       |
+| Route Table         | pfSense routing                               | ✅       |
+| Security Group      | UFW per-VM (cloud-init) + Proxmox firewall    | ✅       |
+| EC2 instance        | Proxmox VM (cloud-init, cloned from template) | ✅       |
+| AMI                 | VM template 9000 (Ubuntu 24.04 cloud image)   | ✅       |
+| S3                  | MinIO (`nimbus-s3`)                           | ✅       |
+| RDS                 | PostgreSQL 16 VM (`nimbus-rds`)               | ✅       |
+| Route 53            | PowerDNS (`nimbus-dns`, auth + recursor)      | ✅       |
+| ELB / ALB           | HAProxy 2.8 (`nimbus-alb`)                    | ✅       |
+| ACM / TLS certs     | Let's Encrypt (public) + step-ca (internal)   | ✅       |
+| CloudFront / CDN    | Cloudflare Tunnel (zero-trust ingress)        | ✅       |
+| IAM                 | Keycloak + HashiCorp Vault                    | planned  |
+| CloudWatch          | Prometheus + Grafana + Loki                   | planned  |
 
 ---
 
-## 4. Repository layout
+## Phases
+
+### ✅ Phase 0 — Prereqs (manual, one-time)
+- Proxmox VE 8.x installed
+- Proxmox API token for Terraform
+- Ubuntu 24.04 cloud image downloaded, template VM 9000 built
+- pfSense deployed with 5 interfaces (WAN + one per subnet)
+
+### ✅ Phase 1 — Network foundation
+- Proxmox SDN Zone `nimbus-vpc` + 4 VNets configured manually
+- pfSense as IGW + NAT + firewall
+- Port-forward 80/443 on pfSense WAN → nimbus-alb
+
+### ✅ Phase 2 — Golden image
+- Ubuntu 24.04 cloud-init template (VMID 9000)
+- All VMs clone from this template via `bpg/proxmox` Terraform provider
+
+### ✅ Phase 3 — DNS (Route 53 equivalent)
+- nimbus-dns deployed with PowerDNS authoritative (`nimbus.local`, `nimbusnode.org`)
+- All VM A records managed by Terraform via `pan-net/powerdns` provider
+- Split-horizon: `cloud.nimbusnode.org` resolves to ALB internally, Cloudflare externally
+
+### ✅ Phase 4 — Load balancer
+- nimbus-alb deployed (HAProxy 2.8 in public subnet)
+- Backends: `nextcloud-aio` (internal only), `nextcloud-cloud` (nimbus-cloud-01)
+- `:80` HTTP frontend for cloudflared; `:443` HTTPS with SNI cert selection
+
+### ✅ Phase 5 — Nextcloud + TLS + Cloudflare Tunnel
+- **5a:** terraform fmt / provider upgrades
+- **5b:** pgbackrest pipeline; MinIO mc install
+- **5c/5d:** nimbus-cloud-01 deployed (Nextcloud 30.0.17, nginx, PHP-FPM 8.3, PostgreSQL backend, MinIO as S3 Primary Object Storage)
+- **5e:** HTTPS on nimbus-alb — LE wildcard cert (`*.nimbusnode.org`) via acme.sh + Cloudflare DNS-01; step-ca wildcard cert (`*.nimbus.local`); SNI-based cert directory in HAProxy
+- **5f:** Cloudflare Tunnel (cloudflared on nimbus-alb, protocol: http2); bastion module; Nimbus internal CA in Terraform (`hashicorp/tls`); `nimbus-ca.crt` exported for client import
+
+### 🔲 Phase 6 — Observability
+- Prometheus + node-exporter on each VM
+- Grafana dashboards committed as JSON
+- Loki + Promtail; Proxmox audit log shipped as CloudTrail equivalent
+
+### 🔲 Phase 7 — IAM
+- Keycloak (OIDC identity provider)
+- HashiCorp Vault (secrets + dynamic DB credentials)
+
+---
+
+## Repository layout
 
 ```
 nimbus-infra/
-├── README.md                       <- you are here
-├── ARCHITECTURE.md                 <- AWS-to-Proxmox mapping in depth
-├── .gitignore
-├── .github/workflows/terraform.yml <- plan on PR, apply on merge
+├── README.md                        ← you are here
+├── ARCHITECTURE.md                  ← AWS-to-Proxmox mapping in depth
+├── NOTES.md                         ← lab journal, gotchas, decisions
 ├── terraform/
-│   ├── providers.tf                <- bpg/proxmox provider
-│   ├── variables.tf                <- all CHANGE_ME inputs
-│   ├── terraform.tfvars.example    <- copy to terraform.tfvars, edit
-│   ├── network.tf                  <- firewall rules (SGs/NACLs)
-│   ├── compute.tf                  <- VMs cloned from template
-│   └── modules/                    <- add as you grow
-└── cloud-init/
-    └── user-data.yml.tftpl         <- Nimbus user, SSH keys, base pkgs
+│   ├── providers.tf                 ← bpg/proxmox, powerdns, tls, random
+│   ├── variables.tf                 ← all inputs (CHANGE_ME items called out)
+│   ├── terraform.tfvars.example     ← copy to terraform.tfvars, fill in
+│   ├── alb.tf                       ← nimbus-alb (HAProxy module)
+│   ├── bastion.tf                   ← nimbus-bastion (DMZ jumpbox)
+│   ├── certs.tf                     ← Nimbus CA + ALB TLS cert (hashicorp/tls)
+│   ├── cloud.tf                     ← nimbus-cloud-01 (Nextcloud module)
+│   ├── dns.tf                       ← PowerDNS zones + A records
+│   ├── instances.tf                 ← generic compute instance locals
+│   ├── network.tf                   ← Proxmox firewall rules
+│   ├── rds.tf                       ← nimbus-rds (PostgreSQL module)
+│   ├── s3.tf                        ← nimbus-s3 (MinIO module)
+│   ├── nimbus-ca.crt                ← Internal CA cert (import into browsers)
+│   └── modules/
+│       ├── bastion/                 ← DMZ jumpbox module
+│       ├── haproxy/                 ← ALB module (HAProxy + cloudflared)
+│       ├── minio/                   ← S3 module
+│       ├── nextcloud/               ← Nextcloud app-tier module
+│       ├── postgres/                ← RDS module (PostgreSQL + pgbackrest)
+│       └── powerdns/                ← DNS module
+└── docs/
+    └── runbooks/
+        └── internal-ca.md           ← Step-ca setup and cert renewal
 ```
 
 ---
 
-## 5. Proxmox API token (do this first)
-
-On the Proxmox host (shell or web UI → Datacenter → Permissions → API Tokens):
+## Proxmox API token (do this first)
 
 ```bash
-# Create a user for Terraform
 pveum user add terraform@pve --comment "Terraform service account"
-
-# Grant it the rights it needs (tight enough to be safe, loose enough to work)
 pveum aclmod / -user terraform@pve -role PVEAdmin
-
-# Create a token; COPY THE SECRET — it is only shown once
 pveum user token add terraform@pve tf-token --privsep 0
 ```
 
-You will get something like:
-```
-┌──────────────┬──────────────────────────────────────┐
-│ full-tokenid │ terraform@pve!tf-token               │
-├──────────────┼──────────────────────────────────────┤
-│ value        │ xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx │
-└──────────────┴──────────────────────────────────────┘
-```
-
-The `full-tokenid` goes into `PROXMOX_VE_API_TOKEN_ID`, the `value` goes into `PROXMOX_VE_API_TOKEN_SECRET`. Both are referenced from `terraform.tfvars` / GitHub secrets.
+The `full-tokenid` (`terraform@pve!tf-token`) goes into `proxmox_api_token` in `terraform.tfvars`.
 
 ---
 
-## 6. GitHub secrets
-
-In your `nimbus-infra` repo → Settings → Secrets and variables → Actions, add:
-
-| Secret                           | Value                                               |
-|----------------------------------|-----------------------------------------------------|
-| `PROXMOX_VE_ENDPOINT`            | `https://<your-proxmox-ip>:8006/`                   |
-| `PROXMOX_VE_API_TOKEN`           | `terraform@pve!tf-token=<secret-uuid>`              |
-| `PROXMOX_VE_SSH_USERNAME`        | `root`                                              |
-| `PROXMOX_VE_SSH_PRIVATE_KEY`     | contents of an SSH key authorized on Proxmox host   |
-| `NIMBUS_ADMIN_SSH_PUBLIC_KEY`    | your workstation's `~/.ssh/id_ed25519.pub`          |
-
----
-
-## 7. Day-one commands
+## Day-one commands
 
 ```bash
 git clone git@github.com:<you>/nimbus-infra.git
@@ -196,22 +169,39 @@ terraform plan
 terraform apply
 ```
 
-## 8. Day-two maintenance
+Bootstrap order matters — DNS must exist before the PowerDNS provider can create records:
 
-- **Drift detection:** nightly GitHub Action runs `terraform plan` and opens an issue if drift is found.
-- **Upgrades:** bump the Ubuntu cloud image in the template VM, re-snapshot, `terraform taint` one VM at a time to do rolling replacement.
-- **Backups:** Proxmox Backup Server → external disk; MinIO bucket versioning for S3-style data.
-- **Secrets rotation:** rotate the `tf-token` quarterly; update GitHub secret; no code change needed.
+```bash
+# Stage 1: deploy nimbus-dns VM only
+terraform apply -target=module.nimbus_dns
+
+# Stage 2: capture the generated API key
+terraform output -raw nimbus_dns_api_key
+# → paste into terraform.tfvars as powerdns_api_key
+
+# Stage 3: full apply
+terraform apply
+```
 
 ---
 
-## 9. What's explicitly NOT in Terraform (and why)
+## Day-two maintenance
 
-| Thing                  | Why not                                                |
-|------------------------|--------------------------------------------------------|
-| Proxmox SDN zones/vnets| Provider coverage is partial; set up once by hand      |
-| pfSense config         | Use the pfSense UI + config.xml backup in repo         |
-| Grafana dashboards     | JSON files in repo, loaded via provisioning            |
-| OS-level config        | Use Ansible or cloud-init; Terraform just lands the VM |
+- **Nextcloud version bump:** edit `NC_VERSION` in `terraform/modules/nextcloud/user-data.yml.tftpl`, then upgrade the running VM with `occ upgrade` (new VMs pick it up automatically on next rebuild).
+- **LE cert renewal:** acme.sh auto-renews via cron on nimbus-alb; deploy hook reloads HAProxy.
+- **step-ca cert renewal:** `step ca renew` on nimbus-alb before 2026-07-29, then `systemctl reload haproxy`.
+- **Drift detection:** run `terraform plan` — any diff means manual changes have been made to VMs.
+- **Secrets rotation:** rotate `tf-token` quarterly; update `terraform.tfvars`.
 
-Treat Terraform as the "control plane for infrastructure shape" and keep configuration management separate. That mirrors how most mature AWS shops actually run.
+---
+
+## What's explicitly NOT in Terraform (and why)
+
+| Thing                      | Why not                                                        |
+|----------------------------|----------------------------------------------------------------|
+| Proxmox SDN zones/vnets    | Provider coverage is partial; set up once by hand              |
+| pfSense config             | Use the pfSense UI + config.xml backup; port-forward 80/443    |
+| acme.sh / LE cert issuance | Run once manually on nimbus-alb; auto-renews via cron          |
+| cloudflared tunnel token   | Created in Cloudflare dashboard; stored in `terraform.tfvars`  |
+| Grafana dashboards         | JSON files in repo, loaded via provisioning (Phase 6)          |
+| OS-level config post-boot  | Use `occ`, `psql`, etc. directly; Terraform just lands the VM  |
