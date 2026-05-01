@@ -262,6 +262,12 @@ variable "nimbus_dns_static_ip" {
   default     = "10.0.100.10/24" # CHANGE_ME if your mgmt subnet differs
 }
 
+variable "nimbus_mon_ip" {
+  description = "Static IP for nimbus-mon (Prometheus/Grafana/Loki) in the mgmt subnet"
+  type        = string
+  default     = "10.0.100.20"
+}
+
 variable "nimbus_aio_ip" {
   description = "Current IP of your Nextcloud AIO VM on the nimbus-app subnet"
   type        = string
