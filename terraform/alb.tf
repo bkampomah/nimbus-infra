@@ -28,7 +28,7 @@ module "nimbus_alb" {
   backends = [
     {
       name        = "nextcloud-aio"
-      host_match  = "cloud.nimbus.local" # internal only; public traffic migrated to cloud-01
+      host_match  = "cloud.nimbus.local aio.nimbusnode.org"
       server_ip   = var.nimbus_aio_ip
       server_port = 11000
       check       = true
