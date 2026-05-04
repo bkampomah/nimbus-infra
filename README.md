@@ -8,31 +8,111 @@ A learning project that recreates an AWS-style multi-tier network (VPC, subnets,
 
 ## Current state
 
-```
-                 ┌────────────────────────────────────────────────────────┐
- Internet        │  Proxmox host — "nimbus-region-1"                      │
-    │            │                                                        │
-    ▼            │   ┌─────────────── Nimbus VPC (10.0.0.0/16) ───────────┼──┐
- Cloudflare      │   │                                                    │  │
- Tunnel ─────────┼───► Public subnet     10.0.1.0/24                     │  │
-    │            │   │   ├─ nimbus-alb       10.0.1.10  (HAProxy)        │  │
-    ▼            │   │   └─ nimbus-bastion   10.0.1.20  (jumpbox)        │  │
- nimbus-alb      │   │                                                    │  │
-    │            │   │  App subnet       10.0.10.0/24                    │  │
-    ├────────────┼───►   ├─ nimbus-aio       10.0.10.101 (Nextcloud AIO) │  │
-    └────────────┼───►   └─ nimbus-cloud-01  10.0.10.102 (Nextcloud)     │  │
-                 │   │                                                    │  │
-                 │   │  Data subnet      10.0.20.0/24                    │  │
-                 │   │   ├─ nimbus-rds      10.0.20.103 (PostgreSQL)     │  │
-                 │   │   └─ nimbus-s3       10.0.20.101 (MinIO)          │  │
-                 │   │                                                    │  │
-                 │   │  Mgmt subnet      10.0.100.0/24                   │  │
-                 │   │   ├─ nimbus-dns      10.0.100.10 (PowerDNS)       │  │
-                 │   │   └─ nimbus-mon      10.0.100.20 (Prometheus/Grafana/Loki) │  │
-                 │   └────────────────────────────────────────────────────┘  │
-                 └────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    %% ── External layer ────────────────────────────────────────────────────────
+    USER(("👤 User\n(browser / mobile)"))
+    CF["☁️ Cloudflare Edge\nZero Trust Tunnel\n≈ AWS CloudFront"]
 
- pfSense (IGW/NAT) sits at each subnet gateway (.1 of each /24)
+    USER -->|"HTTPS"| CF
+
+    %% ── Proxmox host boundary ────────────────────────────────────────────────
+    subgraph PROXMOX["🖥️  Proxmox Host — nimbus-region-1   (≈ AWS Region / AZ)"]
+
+        %% ── pfSense ──────────────────────────────────────────────────────────
+        PF["🔥 pfSense\nIGW + NAT + Route Tables\n≈ AWS Internet Gateway + NAT Gateway"]
+
+        %% ── Nimbus VPC ───────────────────────────────────────────────────────
+        subgraph VPC["Nimbus VPC — 10.0.0.0/16   (≈ AWS VPC)"]
+
+            %% ── Public subnet ────────────────────────────────────────────────
+            subgraph PUB["🌐 Public Subnet — 10.0.1.0/24   (≈ Public Subnet)"]
+                ALB["⚖️ nimbus-alb\n10.0.1.10\nHAProxy 2.8 + cloudflared\n≈ AWS ALB + CloudFront origin"]
+                BASTION["🪖 nimbus-bastion\n10.0.1.20\nDMZ Jumpbox\n≈ AWS Bastion / EC2"]
+            end
+
+            %% ── App subnet ───────────────────────────────────────────────────
+            subgraph APP["🟦 App Subnet — 10.0.10.0/24   (≈ Private App Tier)"]
+                CLOUD["☁️ nimbus-cloud-01\n10.0.10.102\nNextcloud 30\nnginx + PHP-FPM 8.3\n≈ AWS EC2 App Server"]
+                AIO["📦 nimbus-aio\n10.0.10.101\nNextcloud AIO\n(legacy / rollback)"]
+            end
+
+            %% ── Data subnet ──────────────────────────────────────────────────
+            subgraph DATA["🟨 Data Subnet — 10.0.20.0/24   (≈ Private Data Tier)"]
+                RDS["🐘 nimbus-rds\n10.0.20.103\nPostgreSQL 16 + pgbackrest\n≈ AWS RDS"]
+                S3["🪣 nimbus-s3\n10.0.20.101\nMinIO\n≈ AWS S3"]
+            end
+
+            %% ── Mgmt subnet ──────────────────────────────────────────────────
+            subgraph MGMT["🟩 Mgmt Subnet — 10.0.100.0/24   (≈ Management / Out-of-band)"]
+                DNS["🌍 nimbus-dns\n10.0.100.10\nPowerDNS authoritative + recursor\n≈ AWS Route 53"]
+                MON["📊 nimbus-mon\n10.0.100.20\nPrometheus + Grafana + Loki\n≈ AWS CloudWatch"]
+            end
+
+        end
+    end
+
+    %% ── Traffic flows ─────────────────────────────────────────────────────────
+
+    %% Cloudflare Tunnel → ALB (plain HTTP over loopback, Host header preserved)
+    CF -->|"Tunnel → :80\ncloud.nimbusnode.org\naio.nimbusnode.org"| ALB
+
+    %% pfSense is the VPC router / IGW
+    PF -->|"NAT outbound\n10.0.0.0/16 → WAN"| PUB
+    PF --- APP
+    PF --- DATA
+    PF --- MGMT
+
+    %% ALB → backends (host-header ACL)
+    ALB -->|":80 / :443\nHost: cloud.nimbusnode.org\nHost: cloud-app.nimbus.local"| CLOUD
+    ALB -->|":80 / :443\nHost: aio.nimbusnode.org\nHost: cloud.nimbus.local"| AIO
+    ALB -->|":443\nHost: mon.nimbus.local"| MON
+
+    %% App tier → data tier
+    CLOUD -->|"SQL :5432"| RDS
+    CLOUD -->|"S3 API :9000"| S3
+    RDS -->|"WAL archive → S3"| S3
+
+    %% DNS resolution (split-horizon)
+    DNS -. "*.nimbus.local A records\n(internal split-horizon)" .-> ALB
+    DNS -. "resolves all VMs" .-> CLOUD
+
+    %% Observability scrape (dashed = pull)
+    MON -. "node-exporter\n:9100 scrape" .-> ALB
+    MON -. "node-exporter\n:9100 scrape" .-> BASTION
+    MON -. "node-exporter\n:9100 scrape" .-> CLOUD
+    MON -. "node-exporter\n:9100 scrape" .-> RDS
+    MON -. "node-exporter\n:9100 scrape" .-> S3
+    MON -. "node-exporter\n:9100 scrape" .-> DNS
+
+    %% Promtail push (dashed = push)
+    ALB -. "Promtail\nlogs → Loki" .-> MON
+    BASTION -. "Promtail\nlogs → Loki" .-> MON
+    CLOUD -. "Promtail\nlogs → Loki" .-> MON
+    RDS -. "Promtail\nlogs → Loki" .-> MON
+    S3 -. "Promtail\nlogs → Loki" .-> MON
+    DNS -. "Promtail\nlogs → Loki" .-> MON
+
+    %% Terraform manages everything
+    TF(["🏗️ Terraform\n(bpg/proxmox\npan-net/powerdns\nhashicorp/tls)"])
+    TF -. "provisions & configures\nall VMs via cloud-init" .-> VPC
+
+    %% ── Styling ───────────────────────────────────────────────────────────────
+    classDef internet  fill:#1a1a2e,stroke:#e94560,color:#fff
+    classDef pfsense   fill:#c0392b,stroke:#e74c3c,color:#fff
+    classDef alb       fill:#8e44ad,stroke:#9b59b6,color:#fff
+    classDef app       fill:#1a5276,stroke:#2980b9,color:#fff
+    classDef data      fill:#7d6608,stroke:#f1c40f,color:#fff
+    classDef mgmt      fill:#145a32,stroke:#27ae60,color:#fff
+    classDef tf        fill:#4a235a,stroke:#8e44ad,color:#fff,stroke-dasharray:5 5
+
+    class USER,CF internet
+    class PF pfsense
+    class ALB,BASTION alb
+    class CLOUD,AIO app
+    class RDS,S3 data
+    class DNS,MON mgmt
+    class TF tf
 ```
 
 **Public access:**
