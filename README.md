@@ -9,33 +9,37 @@ A learning project that recreates an AWS-style multi-tier network (VPC, subnets,
 ## Current state
 
 ```
-                 ┌─────────────────────────────────────────────────┐
- Internet        │  Proxmox host — "nimbus-region-1"               │
-    │            │                                                 │
-    ▼            │   ┌──────────── Nimbus VPC (10.0.0.0/16) ───────┼──┐
- Cloudflare      │   │                                             │  │
- Tunnel ─────────┼───► Public subnet   10.0.1.0/24                │  │
-    │            │   │   ├─ nimbus-alb      10.0.1.10  (HAProxy)  │  │
-    ▼            │   │   └─ nimbus-bastion  10.0.1.20  (jumpbox)  │  │
- nimbus-alb      │   │                                             │  │
-    │            │   │  App subnet      10.0.10.0/24              │  │
-    ▼            │   │   └─ nimbus-cloud-01 10.0.10.102 (Nextcloud)│  │
-nimbus-cloud-01  │   │                                             │  │
-                 │   │  Data subnet     10.0.20.0/24              │  │
-                 │   │   ├─ nimbus-rds    10.0.20.103 (PostgreSQL) │  │
-                 │   │   └─ nimbus-s3    10.0.20.101  (MinIO)     │  │
-                 │   │                                             │  │
-                 │   │  Mgmt subnet     10.0.100.0/24             │  │
-                 │   │   └─ nimbus-dns   10.0.100.10  (PowerDNS)  │  │
-                 │   └─────────────────────────────────────────────┘  │
-                 └─────────────────────────────────────────────────────┘
+                 ┌────────────────────────────────────────────────────────┐
+ Internet        │  Proxmox host — "nimbus-region-1"                      │
+    │            │                                                        │
+    ▼            │   ┌─────────────── Nimbus VPC (10.0.0.0/16) ───────────┼──┐
+ Cloudflare      │   │                                                    │  │
+ Tunnel ─────────┼───► Public subnet     10.0.1.0/24                     │  │
+    │            │   │   ├─ nimbus-alb       10.0.1.10  (HAProxy)        │  │
+    ▼            │   │   └─ nimbus-bastion   10.0.1.20  (jumpbox)        │  │
+ nimbus-alb      │   │                                                    │  │
+    │            │   │  App subnet       10.0.10.0/24                    │  │
+    ├────────────┼───►   ├─ nimbus-aio       10.0.10.101 (Nextcloud AIO) │  │
+    └────────────┼───►   └─ nimbus-cloud-01  10.0.10.102 (Nextcloud)     │  │
+                 │   │                                                    │  │
+                 │   │  Data subnet      10.0.20.0/24                    │  │
+                 │   │   ├─ nimbus-rds      10.0.20.103 (PostgreSQL)     │  │
+                 │   │   └─ nimbus-s3       10.0.20.101 (MinIO)          │  │
+                 │   │                                                    │  │
+                 │   │  Mgmt subnet      10.0.100.0/24                   │  │
+                 │   │   ├─ nimbus-dns      10.0.100.10 (PowerDNS)       │  │
+                 │   │   └─ nimbus-mon      10.0.100.20 (Prometheus/Grafana/Loki) │  │
+                 │   └────────────────────────────────────────────────────┘  │
+                 └────────────────────────────────────────────────────────────┘
 
  pfSense (IGW/NAT) sits at each subnet gateway (.1 of each /24)
 ```
 
-**Public access:** `https://cloud.nimbusnode.org` → Cloudflare Tunnel → nimbus-cloud-01:80
+**Public access:**
+- `https://cloud.nimbusnode.org` → Cloudflare Tunnel → nimbus-alb → nimbus-cloud-01:80
+- `https://aio.nimbusnode.org` → Cloudflare Tunnel → nimbus-alb → nimbus-aio:11000
 
-**Internal access:** `https://cloud-app.nimbus.local` → nimbus-alb:443 (step-ca TLS) → nimbus-cloud-01:80
+**Internal access:** `https://cloud.nimbus.local` or `https://mon.nimbus.local` → nimbus-alb:443 (self-CA TLS) → backend
 
 See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 
@@ -60,8 +64,8 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 | ELB / ALB           | HAProxy 2.8 (`nimbus-alb`)                    | ✅       |
 | ACM / TLS certs     | Let's Encrypt (public) + step-ca (internal)   | ✅       |
 | CloudFront / CDN    | Cloudflare Tunnel (zero-trust ingress)        | ✅       |
+| CloudWatch          | Prometheus + Grafana + Loki (`nimbus-mon`)    | ✅ Phase 6 |
 | IAM                 | Keycloak + HashiCorp Vault                    | planned  |
-| CloudWatch          | Prometheus + Grafana + Loki                   | planned  |
 
 ---
 
@@ -100,10 +104,11 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 - **5d** *(Easy)* — ALB + DNS wiring: HAProxy backend for nimbus-cloud-01; PowerDNS A record; Cloudflare Tunnel (cloudflared on nimbus-alb, `protocol: http2`)
 - **5e** *(Trivial)* — Cutover: Cloudflare CNAME flipped from AIO tunnel to ALB tunnel; AIO kept on `cloud.nimbus.local` for rollback
 
-### 🔲 Phase 6 — Observability
-- Prometheus + node-exporter on each VM
-- Grafana dashboards committed as JSON
-- Loki + Promtail; Proxmox audit log shipped as CloudTrail equivalent
+### ✅ Phase 6 — Observability
+- `nimbus-mon` deployed on `10.0.100.20` (Prometheus + Grafana + Loki)
+- `node-exporter` + `Promtail` on every VM via cloud-init
+- Grafana at `mon.nimbus.local` (also proxied via nimbus-alb on `:443`)
+- Loki receives syslog + auth.log streams from all hosts
 
 ### 🔲 Phase 7 — IAM
 - Keycloak (OIDC identity provider)
@@ -118,28 +123,35 @@ nimbus-infra/
 ├── README.md                        ← you are here
 ├── ARCHITECTURE.md                  ← AWS-to-Proxmox mapping in depth
 ├── NOTES.md                         ← lab journal, gotchas, decisions
+├── PHASE7.md                        ← upcoming IaC cleanup notes
+├── scripts/
+│   └── update-upgrade.sh            ← utility: apt update + upgrade all VMs
 ├── terraform/
 │   ├── providers.tf                 ← bpg/proxmox, powerdns, tls, random
 │   ├── variables.tf                 ← all inputs (CHANGE_ME items called out)
 │   ├── terraform.tfvars.example     ← copy to terraform.tfvars, fill in
-│   ├── alb.tf                       ← nimbus-alb (HAProxy module)
+│   ├── alb.tf                       ← nimbus-alb (HAProxy + cloudflared)
 │   ├── bastion.tf                   ← nimbus-bastion (DMZ jumpbox)
 │   ├── certs.tf                     ← Nimbus CA + ALB TLS cert (hashicorp/tls)
 │   ├── cloud.tf                     ← nimbus-cloud-01 (Nextcloud module)
 │   ├── dns.tf                       ← PowerDNS zones + A records
 │   ├── instances.tf                 ← generic compute instance locals
+│   ├── mon.tf                       ← nimbus-mon (Prometheus/Grafana/Loki)
 │   ├── network.tf                   ← Proxmox firewall rules
 │   ├── rds.tf                       ← nimbus-rds (PostgreSQL module)
 │   ├── s3.tf                        ← nimbus-s3 (MinIO module)
-│   ├── nimbus-ca.crt                ← Internal CA cert (import into browsers)
 │   └── modules/
 │       ├── bastion/                 ← DMZ jumpbox module
 │       ├── haproxy/                 ← ALB module (HAProxy + cloudflared)
 │       ├── minio/                   ← S3 module
+│       ├── monitoring/              ← nimbus-mon module (Prometheus + Grafana + Loki)
 │       ├── nextcloud/               ← Nextcloud app-tier module
 │       ├── postgres/                ← RDS module (PostgreSQL + pgbackrest)
 │       └── powerdns/                ← DNS module
 └── docs/
+    ├── ssh-config.txt               ← SSH config for all Nimbus hosts
+    ├── haproxy-nextcloud.cfg.example← Reference HAProxy config (pre-Terraform)
+    ├── nextcloud-cloudflare-tunnel.md ← Cloudflare Tunnel topology notes
     └── runbooks/
         └── internal-ca.md           ← Step-ca setup and cert renewal
 ```

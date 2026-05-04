@@ -178,12 +178,15 @@ Split-horizon for `cloud.nimbusnode.org`: internal clients resolve to `nimbus-al
 - `*.nimbus.local` — Internal wildcard from Nimbus step-ca (valid 90 days, renew with `step ca renew`).
 
 **Backends:**
-| Backend             | Host match                              | Upstream               |
-|---------------------|-----------------------------------------|------------------------|
-| `nextcloud-aio`     | `cloud.nimbus.local`                    | 10.0.10.101:11000      |
-| `nextcloud-cloud`   | `cloud-app.nimbus.local`, `cloud.nimbusnode.org` | 10.0.10.102:80 |
+| Backend             | Host match                                        | Upstream               |
+|---------------------|---------------------------------------------------|------------------------|
+| `nextcloud-aio`     | `cloud.nimbus.local`, `aio.nimbusnode.org`        | 10.0.10.101:11000      |
+| `nextcloud-cloud`   | `cloud-app.nimbus.local`, `cloud.nimbusnode.org`  | 10.0.10.102:80         |
+| `grafana`           | `mon.nimbus.local`                                | 10.0.100.20:3000       |
 
-**Cloudflare Tunnel:** cloudflared runs on nimbus-alb as a systemd service, connecting to the Cloudflare edge over HTTP/2 (TCP, avoids pfSense QUIC/UDP timeouts). The tunnel routes `cloud.nimbusnode.org` → `http://10.0.10.102:80` directly, bypassing HAProxy for external traffic.
+**Cloudflare Tunnel:** cloudflared runs on nimbus-alb as a systemd service (token-based, no config.yml). Public hostnames in Zero Trust dashboard:
+- `cloud.nimbusnode.org` → `http://127.0.0.1:80` (HAProxy HTTP frontend, routes via host ACL)
+- `aio.nimbusnode.org`   → `http://127.0.0.1:80` (same ALB listener, different HAProxy ACL match)
 
 ---
 
@@ -244,7 +247,7 @@ Phase 4 introduces the ALB tier and routes internal traffic through it before an
 - `alb.tf` — HAProxy load balancer
 - `bastion.tf` — DMZ jumpbox
 - `web.tf` — app-tier web VMs (placeholder for future services)
-- `mon.tf` — observability VM (placeholder)
+- `mon.tf` — observability VM (`nimbus-mon`, deployed in Phase 6)
 
 The more important change is **deleting the Proxmox firewall security group resources from `network.tf`** and relying on UFW in cloud-init instead. Why:
 
@@ -344,15 +347,21 @@ Update the Cloudflare CNAME for `cloud.nimbusnode.org` to point at the new Cloud
 
 ## 17. Observability
 
-| AWS              | Nimbus (planned)                            |
-|------------------|---------------------------------------------|
-| CloudWatch Metrics | Prometheus scraping `node-exporter`       |
-| CloudWatch Logs    | Loki + Promtail                           |
-| CloudWatch Alarms  | Prometheus Alertmanager                   |
-| X-Ray              | Tempo or Jaeger (optional)                |
-| CloudTrail         | Proxmox audit log shipped into Loki       |
+| AWS                | Nimbus equivalent                                   | Status |
+|--------------------|-----------------------------------------------------|--------|
+| CloudWatch Metrics | Prometheus scraping `node-exporter` on every VM     | ✅ Phase 6 |
+| CloudWatch Logs    | Loki + Promtail (all VMs ship `/var/log/syslog`)    | ✅ Phase 6 |
+| CloudWatch Dashboards | Grafana at `mon.nimbus.local` (ALB-proxied)      | ✅ Phase 6 |
+| CloudWatch Alarms  | Prometheus Alertmanager                             | 🔲 Planned |
+| X-Ray              | Tempo or Jaeger (optional)                          | 🔲 Planned |
+| CloudTrail         | Proxmox audit log shipped into Loki                 | 🔲 Planned |
 
-Not yet deployed. Planned for a dedicated `nimbus-mon` VM in the mgmt subnet.
+**Deployed (Phase 6):** `nimbus-mon` runs on `10.0.100.20` (mgmt subnet).
+
+- **Prometheus** scrapes `node-exporter` (port 9100) from all Nimbus VMs every 15 s.
+- **Loki** receives log streams from **Promtail** agents on each VM.
+- **Grafana** at `mon.nimbus.local:3000` — also reachable via the ALB HTTPS frontend on the same hostname.
+- Every module (`nimbus-alb`, `nimbus-bastion`, `nimbus-mon`) provisions `node-exporter` and `Promtail` via cloud-init at boot.
 
 ---
 
