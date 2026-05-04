@@ -1,0 +1,107 @@
+# ── Nimbus SSH Config ─────────────────────────────────────────────────────────
+# Append to C:\Users\bkamp\.ssh\config
+#
+# Direct hosts (home LAN reachable):
+#   nimbus-aio       192.168.1.72   (Nextcloud AIO, dual-homed)
+#   nimbus-bastion   10.0.1.20      (jump host / DMZ)
+#   nimbus-pfsense   10.0.1.1       (VPC-Edge firewall)
+#
+# Internal VMs via bastion ProxyJump:
+#   nimbus-alb       10.0.1.10      (HAProxy + cloudflared)
+#   nimbus-dns       10.0.100.10    (PowerDNS)
+#   nimbus-mon       10.0.100.20    (Prometheus / Grafana / Loki)
+#   nimbus-cloud-01  10.0.10.102    (Nextcloud nginx+pgsql+MinIO)
+#   nimbus-s3        10.0.20.101    (MinIO)
+#   nimbus-rds       10.0.20.103    (PostgreSQL 16)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Direct hosts ──────────────────────────────────────────────────────────────
+
+Host nimbus-aio
+    HostName 192.168.1.72
+    User nimbus
+    IdentityFile C:/Users/bkamp/.ssh/id_ed25519
+    IdentitiesOnly yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+    TCPKeepAlive yes
+
+Host nimbus-bastion
+    HostName 10.0.1.20
+    User nimbus
+    IdentityFile C:/Users/bkamp/.ssh/id_ed25519
+    IdentitiesOnly yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+    TCPKeepAlive yes
+
+Host nimbus-pfsense
+    HostName 10.0.1.1
+    User admin
+    IdentityFile C:/Users/bkamp/.ssh/id_ed25519
+    IdentitiesOnly yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+    TCPKeepAlive yes
+
+# ── Internal VMs (via bastion) ────────────────────────────────────────────────
+
+Host nimbus-alb
+    HostName 10.0.1.10
+    User nimbus
+    ProxyJump nimbus-bastion
+    IdentityFile C:/Users/bkamp/.ssh/id_ed25519
+    IdentitiesOnly yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+    TCPKeepAlive yes
+
+Host nimbus-dns
+    HostName 10.0.100.10
+    User nimbus
+    ProxyJump nimbus-bastion
+    IdentityFile C:/Users/bkamp/.ssh/id_ed25519
+    IdentitiesOnly yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+    TCPKeepAlive yes
+
+Host nimbus-mon
+    HostName 10.0.100.20
+    User nimbus
+    ProxyJump nimbus-bastion
+    IdentityFile C:/Users/bkamp/.ssh/id_ed25519
+    IdentitiesOnly yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+    TCPKeepAlive yes
+
+Host nimbus-cloud-01
+    HostName 10.0.10.102
+    User nimbus
+    ProxyJump nimbus-bastion
+    IdentityFile C:/Users/bkamp/.ssh/id_ed25519
+    IdentitiesOnly yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+    TCPKeepAlive yes
+
+Host nimbus-s3
+    HostName 10.0.20.101
+    User nimbus
+    ProxyJump nimbus-bastion
+    IdentityFile C:/Users/bkamp/.ssh/id_ed25519
+    IdentitiesOnly yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+    TCPKeepAlive yes
+
+Host nimbus-rds
+    HostName 10.0.20.103
+    User nimbus
+    ProxyJump nimbus-bastion
+    IdentityFile C:/Users/bkamp/.ssh/id_ed25519
+    IdentitiesOnly yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 6
+    TCPKeepAlive yes

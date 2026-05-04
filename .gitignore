@@ -30,3 +30,17 @@ id_ed25519*
 
 # Phase-scoping — .disabled files are local-only and not part of the committed code
 terraform/*.tf.disabled
+
+# Terraform backups (generated on apply, may contain real IPs/secrets)
+terraform/backups/
+
+# Generated CA certs (recreated by Terraform on each provision)
+*.crt
+terraform/nimbus-ca.crt
+
+# One-off bootstrap scripts (functionality baked into module cloud-init templates)
+install-obs.sh
+install-monitoring.sh
+
+# Cloudflare / Argo Tunnel credential files (binary token files, no extension)
+*=
