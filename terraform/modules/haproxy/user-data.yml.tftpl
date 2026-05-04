@@ -339,6 +339,13 @@ write_files:
       NODE_EXPORTER_VERSION="1.8.2"
       PROMTAIL_VERSION="3.1.0"
 
+      # Create service users first — if a download fails below, systemd won't
+      # crash with exit 217/USER on the next boot attempt.
+      useradd --system --no-create-home --shell /bin/false node_exporter 2>/dev/null || true
+      useradd --system --no-create-home --shell /bin/false promtail 2>/dev/null || true
+      mkdir -p /etc/promtail /var/lib/promtail
+      chown promtail:promtail /var/lib/promtail /etc/promtail
+
       if [ ! -f /usr/local/bin/node_exporter ]; then
         echo "== Installing node-exporter $${NODE_EXPORTER_VERSION}"
         curl -fsSL -o /tmp/ne.tar.gz \
@@ -349,8 +356,6 @@ write_files:
         rm -rf "/tmp/node_exporter-$${NODE_EXPORTER_VERSION}.linux-amd64" /tmp/ne.tar.gz
       fi
 
-      useradd --system --no-create-home --shell /bin/false node_exporter 2>/dev/null || true
-
       if [ ! -f /usr/local/bin/promtail ]; then
         echo "== Installing Promtail $${PROMTAIL_VERSION}"
         curl -fsSL -o /tmp/promtail.zip \
@@ -360,10 +365,6 @@ write_files:
         chmod +x /usr/local/bin/promtail
         rm -f /tmp/promtail.zip
       fi
-
-      useradd --system --no-create-home --shell /bin/false promtail 2>/dev/null || true
-      mkdir -p /etc/promtail /var/lib/promtail
-      chown promtail:promtail /var/lib/promtail /etc/promtail
 
       systemctl daemon-reload
       systemctl enable --now node-exporter
