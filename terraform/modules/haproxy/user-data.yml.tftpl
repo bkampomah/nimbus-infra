@@ -137,6 +137,12 @@ write_files:
           # Capture the host header for logging and routing
           capture request header Host len 64
 
+          # Cloudflare Tunnel reaches this listener over plain HTTP, but the
+          # public client request is HTTPS. Keep Nextcloud's forced HTTPS URL
+          # config and proxy detection aligned with the external scheme.
+          http-request set-header X-Forwarded-Proto https
+          http-request set-header X-Forwarded-Host %[req.hdr(host)]
+
           # Standard security headers (these propagate to backends too)
           http-response set-header X-Content-Type-Options nosniff
           http-response set-header X-Frame-Options SAMEORIGIN
@@ -199,7 +205,7 @@ write_files:
           mode http
           balance roundrobin
           option httpchk GET /
-          http-check expect status 200,301,302,401
+          http-check expect rstatus ^(2|3)[0-9][0-9]$|^401$
 
           # server <name> <ip:port> [check] [inter 5s fall 3 rise 2]
           server ${b.name}-01 ${b.server_ip}:${b.server_port} %{ if b.check }check inter 5s fall 3 rise 2%{ endif }

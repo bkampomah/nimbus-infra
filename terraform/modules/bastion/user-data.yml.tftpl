@@ -49,9 +49,8 @@ write_files:
     permissions: '0755'
     content: |
       #!/bin/bash
-      set -euo pipefail
-      curl -kfsS --connect-timeout 5 "https://${pfsense_gui_host}:${pfsense_gui_port}/" >/dev/null
-      echo "pfSense GUI is reachable from this bastion at https://${pfsense_gui_host}:${pfsense_gui_port}"
+      echo "pfSense WAN (${pfsense_gui_host}) is not reachable from inside the Nimbus VPC."
+      echo "Access the GUI directly from your home LAN: https://${pfsense_gui_host}"
 
   - path: /etc/motd
     owner: root:root
@@ -59,14 +58,11 @@ write_files:
     content: |
       Nimbus bastion
 
-      pfSense GUI tunnel from your workstation:
-        ssh -N -L ${tunnel_local_port}:${pfsense_gui_host}:${pfsense_gui_port} ${admin_username}@${hostname}
+      pfSense GUI (home LAN access — no tunnel needed):
+        https://${pfsense_gui_host}
 
-      Then open:
-        https://localhost:${tunnel_local_port}
-
-      Test pfSense reachability from this host:
-        pfsense-gui-check
+      Note: bastion cannot reach pfSense WAN from inside the VPC.
+      Access the GUI directly from your workstation on the home LAN.
 
   # ── Observability: node-exporter + Promtail ───────────────────────────────
   - path: /etc/systemd/system/node-exporter.service

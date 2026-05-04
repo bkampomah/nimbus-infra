@@ -49,7 +49,7 @@ module "nimbus_alb" {
     }
   ]
 
-  alb_allow_cidrs         = [var.vpc_cidr]
+  alb_allow_cidrs         = [var.vpc_cidr, "172.18.0.0/12"]
   mgmt_allow_cidrs        = var.mgmt_allow_cidrs
   cloudflare_tunnel_token = var.cloudflare_tunnel_token
   loki_url                = module.nimbus_mon.loki_url
