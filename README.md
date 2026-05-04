@@ -6,6 +6,12 @@ A learning project that recreates an AWS-style multi-tier network (VPC, subnets,
 
 ---
 
+## Architecture diagram
+
+![Nimbus AWS-Style Network on Proxmox](docs/images/nimbus_aws_proxmox_network_diagram.svg)
+
+---
+
 ## Current state
 
 ```mermaid
@@ -207,6 +213,8 @@ nimbus-infra/
 │       ├── postgres/                ← RDS module (PostgreSQL + pgbackrest)
 │       └── powerdns/                ← DNS module
 └── docs/
+    ├── images/
+    │   └── nimbus_aws_proxmox_network_diagram.svg ← rendered architecture diagram
     ├── ssh-config.txt               ← SSH config for all Nimbus hosts
     ├── haproxy-nextcloud.cfg.example← Reference HAProxy config (pre-Terraform)
     ├── nextcloud-cloudflare-tunnel.md ← Cloudflare Tunnel topology notes
