@@ -106,6 +106,41 @@ write_files:
         sudo -u postgres createdb -O ${initial_db_user} ${initial_db_name}
       fi
 
+%{ for db in additional_databases ~}
+      # Additional database: ${db.name}
+      sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
+      DO $pg$
+      BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${db.user}') THEN
+          CREATE ROLE ${db.user} LOGIN PASSWORD '${db.password}';
+        ELSE
+          ALTER ROLE ${db.user} WITH PASSWORD '${db.password}';
+        END IF;
+      END
+      $pg$;
+      SQL
+
+      if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${db.name}'" | grep -q 1; then
+        sudo -u postgres createdb -O ${db.user} ${db.name}
+      fi
+
+%{ endfor ~}
+%{ if vault_admin_user != "" ~}
+      # Phase 7d — Vault database secrets engine admin role.
+      # SUPERUSER for homelab; tighten in Phase 8.
+      sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
+      DO $pg$
+      BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${vault_admin_user}') THEN
+          CREATE ROLE ${vault_admin_user} LOGIN SUPERUSER PASSWORD '${vault_admin_password}';
+        ELSE
+          ALTER ROLE ${vault_admin_user} WITH SUPERUSER PASSWORD '${vault_admin_password}';
+        END IF;
+      END
+      $pg$;
+      SQL
+
+%{ endif ~}
       echo "nimbus-rds db bootstrap complete."
 
   # ------------------------------------------------------------------------

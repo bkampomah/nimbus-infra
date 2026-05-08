@@ -43,13 +43,22 @@ variable "gateway" {
 }
 
 variable "backends" {
-  description = "List of backend routing rules. Each entry maps one or more Host headers to an upstream server. Separate multiple hostnames in host_match with spaces."
+  description = <<-EOT
+    List of backend routing rules. Each entry maps one or more Host headers to
+    an upstream server. Separate multiple hostnames in host_match with spaces.
+
+    Set tls=true when the upstream listens on HTTPS (e.g. Keycloak :8443).
+    HAProxy will use `ssl verify none` against the upstream — fine because
+    everything inside the VPC is signed by the same internal CA.
+    Phase 8 should switch to verified upstream TLS via a ca-file.
+  EOT
   type = list(object({
     name        = string # internal label (e.g. "nextcloud-aio")
     host_match  = string # e.g. "cloud.nimbus.local cloud.example.com"
     server_ip   = string # e.g. "10.0.10.101"
     server_port = number # e.g. 11000
     check       = optional(bool, true)
+    tls         = optional(bool, false)
   }))
   default = []
 }

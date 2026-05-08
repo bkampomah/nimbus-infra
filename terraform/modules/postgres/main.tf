@@ -28,14 +28,17 @@ resource "proxmox_virtual_environment_file" "user_data" {
   source_raw {
     file_name = "${var.name}-user-data.yaml"
     data = templatefile("${path.module}/user-data.yml.tftpl", {
-      hostname        = var.name
-      admin_username  = var.admin_username
-      admin_password  = var.admin_password
-      admin_ssh_keys  = var.admin_ssh_keys
-      initial_db_name = var.initial_db_name
-      initial_db_user = var.initial_db_user
-      initial_db_pw   = var.initial_db_password
-      allowed_cidr    = var.allowed_cidr
+      hostname             = var.name
+      admin_username       = var.admin_username
+      admin_password       = var.admin_password
+      admin_ssh_keys       = var.admin_ssh_keys
+      initial_db_name      = var.initial_db_name
+      initial_db_user      = var.initial_db_user
+      initial_db_pw        = var.initial_db_password
+      additional_databases = var.additional_databases
+      vault_admin_user     = var.vault_admin_user
+      vault_admin_password = var.vault_admin_password
+      allowed_cidr         = var.allowed_cidr
 
       # MinIO targets for the pg-backup push step
       s3_endpoint      = var.s3_endpoint

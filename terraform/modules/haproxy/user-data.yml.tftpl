@@ -207,8 +207,8 @@ write_files:
           option httpchk GET /
           http-check expect rstatus ^(2|3)[0-9][0-9]$|^401$
 
-          # server <name> <ip:port> [check] [inter 5s fall 3 rise 2]
-          server ${b.name}-01 ${b.server_ip}:${b.server_port} %{ if b.check }check inter 5s fall 3 rise 2%{ endif }
+          # server <name> <ip:port> [check] [inter 5s fall 3 rise 2] [ssl verify none]
+          server ${b.name}-01 ${b.server_ip}:${b.server_port}%{ if b.check } check inter 5s fall 3 rise 2%{ endif }%{ if b.tls } ssl verify none%{ endif }
 %{ endfor ~}
 
       # Fallback when no host matches - returns 503 directly

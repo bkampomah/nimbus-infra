@@ -280,6 +280,36 @@ variable "nimbus_alb_ip" {
   default     = "10.0.1.10" # CHANGE_ME later when ALB is built
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 7 — IAM stack (nimbus-iam Keycloak + nimbus-vault HashiCorp Vault)
+# Both VMs live in the mgmt subnet (10.0.100.0/24).
+# Keycloak is fronted by nimbus-alb (TLS re-encrypt) and reachable externally
+# via Cloudflare Tunnel; Vault stays internal-only (Tailscale + mgmt subnet).
+# ─────────────────────────────────────────────────────────────────────────────
+
+variable "nimbus_iam_ip" {
+  description = "Static IP for nimbus-iam (Keycloak) in the mgmt subnet"
+  type        = string
+  default     = "10.0.100.30"
+}
+
+variable "nimbus_vault_ip" {
+  description = "Static IP for nimbus-vault in the mgmt subnet"
+  type        = string
+  default     = "10.0.100.40"
+}
+
+variable "keycloak_domain" {
+  description = <<-EOT
+    Public FQDN for Keycloak. With a Cloudflare Tunnel this is the external
+    hostname (e.g. auth.nimbusnode.org). Sets KC_HOSTNAME so OIDC redirects
+    target the public URL — without this, Keycloak emits localhost:8443 in
+    the discovery document and SSO redirects break.
+  EOT
+  type        = string
+  default     = "auth.nimbusnode.org"
+}
+
 variable "mgmt_allow_cidrs" {
   description = "CIDRs allowed to reach management APIs (e.g. PowerDNS API, future ALB admin UIs). Typically your home/office LAN plus the VPC itself."
   type        = list(string)

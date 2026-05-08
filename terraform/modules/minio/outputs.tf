@@ -44,3 +44,15 @@ output "pgbackup_secret_key" {
   value       = var.pgbackup_secret_key
   sensitive   = true
 }
+
+# Added in 7b — keycloak module reads these for the nightly realm-export push
+output "kc_backup_access_key" {
+  description = "Service account key for the Keycloak realm-export writer"
+  value       = var.kc_backup_access_key
+}
+
+output "kc_backup_secret_key" {
+  description = "Service account secret for the Keycloak realm-export writer (sensitive)"
+  value       = var.kc_backup_secret_key
+  sensitive   = true
+}

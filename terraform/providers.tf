@@ -24,6 +24,20 @@ terraform {
       source  = "hashicorp/tls"
       version = "~> 4.0"
     }
+    # Phase 7b — Keycloak realm-as-code. Hits the master realm admin REST API
+    # on nimbus-iam:8443 to provision realms, clients, users.
+    keycloak = {
+      source  = "keycloak/keycloak"
+      version = "~> 5.0"
+    }
+    # Phase 7d — Vault secrets engines, auth methods, policies. Authenticates
+    # via VAULT_TOKEN env var (operator's root token initially; an admin token
+    # under OIDC after the realm is wired). Vault must be initialized + unsealed
+    # before plan/apply hits any vault_* resource — see docs/runbooks/vault-init.md.
+    vault = {
+      source  = "hashicorp/vault"
+      version = "~> 4.4"
+    }
   }
 
   # backend "remote" {

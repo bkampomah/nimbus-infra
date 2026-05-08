@@ -54,6 +54,42 @@ variable "initial_db_password" {
   sensitive = true
 }
 
+variable "additional_databases" {
+  description = <<-EOT
+    Extra (database, role) pairs to provision at first boot beyond the initial
+    Nextcloud DB. Each entry creates a database owned by a role of the same name
+    with the supplied password. Used by Phase 7 to host the Keycloak DB on the
+    same nimbus-rds without standing up a second Postgres VM.
+  EOT
+  type = list(object({
+    name     = string
+    user     = string
+    password = string
+  }))
+  default   = []
+  sensitive = true
+}
+
+# ── Phase 7d — Vault database secrets engine admin role ────────────────────
+# Vault's database engine needs a Postgres role with permission to create new
+# users on demand. Empty disables the role creation.
+#
+# In homelab we make it SUPERUSER for simplicity; Phase 8 hardening tightens
+# to membership-of-target-DB-owner + GRANT OPTION.
+
+variable "vault_admin_user" {
+  description = "Username Vault uses to mint dynamic Postgres credentials. Empty disables."
+  type        = string
+  default     = ""
+}
+
+variable "vault_admin_password" {
+  description = "Password for the Vault admin role on Postgres. Required when vault_admin_user is set."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "allowed_cidr" {
   description = "CIDR allowed to connect to Postgres over the network"
   type        = string

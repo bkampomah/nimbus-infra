@@ -1,0 +1,195 @@
+# Render-test scaffolding — rename to .tf, run `terraform plan`, then back.
+# Outputs each module's user-data.yml.tftpl rendered with placeholder values.
+# A separate Python harness reads the JSON output and YAML-validates each.
+
+locals {
+  fake_ssh_keys = ["ssh-ed25519 AAAA placeholder@host"]
+  fake_ca_pem   = "-----BEGIN CERTIFICATE-----\nMIIPLACEHOLDER\n-----END CERTIFICATE-----\n"
+  fake_pem      = "-----BEGIN BLOCK-----\nPLACEHOLDER\n-----END BLOCK-----\n"
+
+  rendered = {
+    bastion = templatefile("${path.module}/modules/bastion/user-data.yml.tftpl", {
+      hostname              = "test-bastion"
+      admin_username        = "nimbus"
+      admin_password        = "pass"
+      admin_ssh_keys        = local.fake_ssh_keys
+      static_ip             = "10.0.1.20/24"
+      pfsense_gui_host      = "10.0.1.1"
+      pfsense_gui_port      = 443
+      tunnel_local_port     = 8443
+      ssh_allow_cidrs       = ["192.168.1.0/24"]
+      mgmt_allow_cidrs      = ["10.0.100.0/24"]
+      loki_url              = "http://10.0.100.20:3100"
+    })
+
+    haproxy = templatefile("${path.module}/modules/haproxy/user-data.yml.tftpl", {
+      hostname                = "test-alb"
+      admin_username          = "nimbus"
+      admin_password          = "pass"
+      admin_ssh_keys          = local.fake_ssh_keys
+      static_ip               = "10.0.1.10/24"
+      backends                = [{ name = "test", host_match = "test.local", server_ip = "10.0.10.1", server_port = 80, check = true, tls = false }]
+      mgmt_allow_cidrs        = ["10.0.100.0/24"]
+      alb_allow_cidrs         = ["10.0.0.0/16"]
+      cloudflare_tunnel_token = "fake"
+      tls_pem                 = local.fake_pem
+      loki_url                = "http://10.0.100.20:3100"
+    })
+
+    keycloak = templatefile("${path.module}/modules/keycloak/user-data.yml.tftpl", {
+      hostname                = "test-iam"
+      admin_username          = "nimbus"
+      admin_password          = "pass"
+      admin_ssh_keys          = local.fake_ssh_keys
+      keycloak_version        = "25.0.6"
+      keycloak_hostname       = "auth.example.org"
+      keycloak_admin_user     = "admin"
+      keycloak_admin_password = "pass"
+      db_host                 = "10.0.20.103"
+      db_port                 = 5432
+      db_name                 = "keycloak"
+      db_user                 = "keycloak"
+      db_password             = "pass"
+      tls_cert_pem            = local.fake_pem
+      tls_key_pem             = local.fake_pem
+      alb_cidr                = "10.0.1.0/24"
+      mgmt_allow_cidrs        = ["10.0.100.0/24"]
+      loki_url                = "http://10.0.100.20:3100"
+      backup_s3_endpoint      = "http://10.0.20.101:9000"
+      backup_s3_access_key    = "kc-backup"
+      backup_s3_secret_key    = "secret"
+      backup_s3_bucket        = "kc-backups"
+      backup_realms           = ["master", "nimbus"]
+    })
+
+    minio = templatefile("${path.module}/modules/minio/user-data.yml.tftpl", {
+      hostname             = "test-s3"
+      admin_username       = "nimbus"
+      admin_password       = "pass"
+      admin_ssh_keys       = local.fake_ssh_keys
+      minio_root_user      = "root"
+      minio_root_password  = "pass"
+      minio_bucket         = "default"
+      pgbackup_access_key  = "pgbackup"
+      pgbackup_secret_key  = "secret"
+      nextcloud_access_key = "nc"
+      nextcloud_secret_key = "secret"
+      kc_backup_access_key = "kc-backup"
+      kc_backup_secret_key = "secret"
+      api_allow_cidrs      = ["10.0.0.0/16"]
+      console_allow_cidrs  = ["10.0.100.0/24"]
+      mgmt_allow_cidrs     = ["10.0.100.0/24"]
+      loki_url             = "http://10.0.100.20:3100"
+      oidc_issuer_url      = "https://auth.example.org/realms/nimbus"
+      oidc_client_id       = "minio-console"
+      oidc_client_secret   = "secret"
+      oidc_role_policy     = "consoleAdmin"
+      nimbus_ca_pem        = local.fake_ca_pem
+      console_redirect_uri = "http://10.0.20.101:9001/oauth_callback"
+    })
+
+    monitoring = templatefile("${path.module}/modules/monitoring/user-data.yml.tftpl", {
+      hostname               = "test-mon"
+      admin_username         = "nimbus"
+      admin_password         = "pass"
+      admin_ssh_keys         = local.fake_ssh_keys
+      scrape_targets         = [{ name = "test", targets = ["localhost:9100"] }]
+      mgmt_allow_cidrs       = ["10.0.100.0/24"]
+      loki_allow_cidrs       = ["10.0.0.0/16"]
+      loki_url               = "http://10.0.100.20:3100"
+      grafana_root_url       = "https://mon.nimbus.local"
+      oidc_issuer_url        = "https://auth.example.org/realms/nimbus"
+      oidc_client_id         = "grafana"
+      oidc_client_secret     = "secret"
+      nimbus_ca_pem          = local.fake_ca_pem
+      grafana_dashboard_json = "{}"
+    })
+
+    nextcloud = templatefile("${path.module}/modules/nextcloud/user-data.yml.tftpl", {
+      hostname                = "test-cloud"
+      admin_username          = "nimbus"
+      admin_password          = "pass"
+      admin_ssh_keys          = local.fake_ssh_keys
+      nextcloud_admin_pw      = "pass"
+      nextcloud_domain        = "cloud.example.org"
+      trusted_domains         = ["cloud.example.org", "cloud.nimbus.local"]
+      trusted_proxies         = ["10.0.1.0/24"]
+      alb_allow_cidrs         = ["10.0.1.0/24"]
+      mgmt_allow_cidrs        = ["10.0.100.0/24"]
+      db_host                 = "10.0.20.103"
+      db_name                 = "nextcloud"
+      db_user                 = "nextcloud"
+      db_password             = "pass"
+      s3_endpoint             = "http://10.0.20.101:9000"
+      s3_bucket               = "nextcloud-data"
+      s3_access_key           = "nc"
+      s3_secret_key           = "secret"
+      loki_url                = "http://10.0.100.20:3100"
+      oidc_issuer_url         = "https://auth.example.org/realms/nimbus"
+      oidc_client_id          = "nextcloud"
+      oidc_client_secret      = "secret"
+      nimbus_ca_pem           = local.fake_ca_pem
+      vault_addr              = "https://10.0.100.40:8200"
+      vault_approle_role_id   = "fake-role-id"
+      vault_approle_secret_id = "fake-secret-id"
+      vault_db_role_path      = "database/creds/nextcloud"
+      vault_version           = "1.18.2"
+    })
+
+    postgres = templatefile("${path.module}/modules/postgres/user-data.yml.tftpl", {
+      hostname             = "test-rds"
+      admin_username       = "nimbus"
+      admin_password       = "pass"
+      admin_ssh_keys       = local.fake_ssh_keys
+      initial_db_name      = "nextcloud"
+      initial_db_user      = "nextcloud"
+      initial_db_pw        = "pass"
+      additional_databases = [{ name = "keycloak", user = "keycloak", password = "pass" }]
+      vault_admin_user     = "vault"
+      vault_admin_password = "pass"
+      allowed_cidr         = "10.0.0.0/16"
+      s3_endpoint          = "http://10.0.20.101:9000"
+      s3_access_key        = "pgbackup"
+      s3_secret_key        = "secret"
+      s3_bucket            = "pg-backups"
+      mgmt_allow_cidrs     = ["10.0.100.0/24"]
+      loki_url             = "http://10.0.100.20:3100"
+    })
+
+    vault = templatefile("${path.module}/modules/vault/user-data.yml.tftpl", {
+      hostname           = "test-vault"
+      admin_username     = "nimbus"
+      admin_password     = "pass"
+      admin_ssh_keys     = local.fake_ssh_keys
+      vault_version      = "1.18.2"
+      cluster_name       = "nimbus"
+      vault_ip           = "10.0.100.40"
+      tls_cert_pem       = local.fake_pem
+      tls_key_pem        = local.fake_pem
+      client_allow_cidrs = ["10.0.0.0/16"]
+      mgmt_allow_cidrs   = ["10.0.100.0/24"]
+      loki_url           = "http://10.0.100.20:3100"
+      nimbus_ca_pem      = local.fake_ca_pem
+    })
+
+    powerdns = templatefile("${path.module}/modules/powerdns/user-data.yml.tftpl", {
+      hostname          = "test-dns"
+      admin_username    = "nimbus"
+      admin_password    = "pass"
+      admin_ssh_keys    = local.fake_ssh_keys
+      static_ip         = "10.0.100.10/24"
+      api_allow_cidrs   = ["10.0.0.0/16"]
+      mgmt_allow_cidrs  = ["10.0.100.0/24"]
+      api_key           = "fake"
+      internal_zones    = ["nimbus.local"]
+      upstream_dns      = ["1.1.1.1"]
+      recursor_forwards = ["1.1.1.1"]
+      loki_url          = "http://10.0.100.20:3100"
+    })
+  }
+}
+
+output "rendered_modules" {
+  value     = local.rendered
+  sensitive = true
+}
