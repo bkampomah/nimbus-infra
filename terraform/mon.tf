@@ -42,7 +42,9 @@ module "nimbus_mon" {
         "${var.nimbus_s3_ip}:9100",      # nimbus-s3
         # nimbus-dns IP is embedded in the static_ip var (strip /24)
         "${split("/", var.nimbus_dns_static_ip)[0]}:9100",
-        "localhost:9100", # nimbus-mon itself
+        "${var.nimbus_iam_ip}:9100",   # nimbus-iam (Phase 7)
+        "${var.nimbus_vault_ip}:9100", # nimbus-vault (Phase 7)
+        "localhost:9100",              # nimbus-mon itself
       ]
     },
     {
@@ -50,6 +52,14 @@ module "nimbus_mon" {
       targets = ["localhost:3100"]
     },
   ]
+
+  # Phase 7c — Grafana OIDC SSO via Keycloak. ROOT_URL must match the public
+  # hostname Grafana is reachable on (the ALB-fronted mon.nimbus.local).
+  grafana_root_url   = "https://mon.nimbus.local"
+  oidc_issuer_url    = "https://${var.keycloak_domain}/realms/${keycloak_realm.nimbus.realm}"
+  oidc_client_id     = keycloak_openid_client.grafana.client_id
+  oidc_client_secret = keycloak_openid_client.grafana.client_secret
+  nimbus_ca_pem      = tls_self_signed_cert.nimbus_ca.cert_pem
 }
 
 output "nimbus_mon_grafana_url" {

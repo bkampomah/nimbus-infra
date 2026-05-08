@@ -116,3 +116,67 @@ variable "loki_url" {
   type        = string
   default     = "http://10.0.100.20:3100"
 }
+
+# ── Phase 7c — OIDC SSO via Keycloak ───────────────────────────────────────
+# Empty oidc_issuer_url disables the user_oidc app install — keeps the
+# module backwards-compatible with Phase 5 deploys.
+
+variable "oidc_issuer_url" {
+  description = "OIDC issuer URL (e.g. https://auth.nimbusnode.org/realms/nimbus). Empty disables OIDC."
+  type        = string
+  default     = ""
+}
+
+variable "oidc_client_id" {
+  description = "OAuth client_id registered in Keycloak for Nextcloud"
+  type        = string
+  default     = ""
+}
+
+variable "oidc_client_secret" {
+  description = "OAuth client_secret for the Nextcloud client"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "nimbus_ca_pem" {
+  description = "Internal CA cert PEM. Installed into the system trust store so Nextcloud's outbound calls to Keycloak validate. Empty skips the install."
+  type        = string
+  default     = ""
+}
+
+# ── Phase 7e — Vault Agent for dynamic Postgres credentials ────────────────
+# Empty vault_addr disables the agent — module stays backward compatible with
+# Phase 5 deploys that don't have Vault yet.
+
+variable "vault_addr" {
+  description = "Vault API endpoint (e.g. https://vault.nimbus.local:8200). Empty disables Vault Agent."
+  type        = string
+  default     = ""
+}
+
+variable "vault_approle_role_id" {
+  description = "AppRole role_id for Vault Agent. Public — commit-safe."
+  type        = string
+  default     = ""
+}
+
+variable "vault_approle_secret_id" {
+  description = "AppRole secret_id for Vault Agent. Sensitive."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "vault_db_role_path" {
+  description = "Vault path that mints dynamic DB creds (e.g. database/creds/nextcloud)."
+  type        = string
+  default     = "database/creds/nextcloud"
+}
+
+variable "vault_version" {
+  description = "Vault binary version installed for Vault Agent (must match nimbus-vault for compat)."
+  type        = string
+  default     = "1.18.2"
+}

@@ -116,3 +116,19 @@ bastion_ssh_allow_cidrs = ["192.168.0.0/16", "10.0.0.0/16"]
 pfsense_gui_host          = "10.0.1.1"
 pfsense_gui_port          = 443
 pfsense_tunnel_local_port = 8443
+
+# ─── Phase 7: IAM (Keycloak + Vault) ────────────────────────────────────────
+# Static IPs in the mgmt subnet — defaults match README diagram.
+nimbus_iam_ip   = "10.0.100.30"
+nimbus_vault_ip = "10.0.100.40"
+
+# Public FQDN for Keycloak. Add this hostname to your Cloudflare Tunnel
+# (Zero Trust dashboard → Networks → Tunnels → your tunnel → Public Hostnames)
+# pointing to http://nimbus-alb:80 — HAProxy routes by Host header to nimbus-iam.
+keycloak_domain = "auth.nimbusnode.org"
+
+# Keycloak DB credentials and the bootstrap admin password are auto-generated
+# by Terraform (random_password). Retrieve after apply:
+#   terraform output -raw keycloak_db_password
+#   terraform output -raw keycloak_admin_password
+# Vault root token comes from `vault operator init` (Phase 7d), not Terraform.

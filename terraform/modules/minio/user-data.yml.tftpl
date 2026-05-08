@@ -38,6 +38,31 @@ write_files:
       MINIO_ROOT_PASSWORD=${minio_root_password}
       MINIO_VOLUMES=/mnt/minio/data
       MINIO_OPTS=--console-address :9001
+%{ if oidc_issuer_url != "" ~}
+
+      # ── Phase 7c — OIDC SSO via Keycloak ─────────────────────────────────
+      # When ROLE_POLICY is set, every OIDC user gets that policy. Phase 8
+      # hardening: switch to claim-based per-group policy mapping (drop
+      # ROLE_POLICY, set CLAIM_NAME=policy, build a Keycloak claim mapper
+      # that emits the right policy name per user).
+      MINIO_IDENTITY_OPENID_CONFIG_URL=${oidc_issuer_url}/.well-known/openid-configuration
+      MINIO_IDENTITY_OPENID_CLIENT_ID=${oidc_client_id}
+      MINIO_IDENTITY_OPENID_CLIENT_SECRET=${oidc_client_secret}
+      MINIO_IDENTITY_OPENID_DISPLAY_NAME=Keycloak
+      MINIO_IDENTITY_OPENID_SCOPES=openid,profile,email
+      MINIO_IDENTITY_OPENID_REDIRECT_URI=${console_redirect_uri}
+      MINIO_IDENTITY_OPENID_ROLE_POLICY=${oidc_role_policy}
+%{ endif ~}
+
+%{ if nimbus_ca_pem != "" ~}
+  # ── Nimbus internal CA — Phase 7c ────────────────────────────────────────
+  # MinIO uses Go's HTTP client which respects /etc/ssl/certs on Linux.
+  - path: /usr/local/share/ca-certificates/nimbus-ca.crt
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${base64encode(nimbus_ca_pem)}
+%{ endif ~}
 
   # --- Staged: MinIO systemd service ------------------------------------
   - path: /root/staging/minio.service
@@ -147,6 +172,29 @@ write_files:
       mc admin policy create local nextcloud-data-rw /tmp/nextcloud-data-policy.json
       mc admin policy attach local nextcloud-data-rw --user "${nextcloud_access_key}"
       rm -f /tmp/nextcloud-data-policy.json
+
+      # Phase 7b — kc-backups bucket + scoped writer for Keycloak realm exports.
+      mc mb --ignore-existing local/kc-backups
+      mc version enable local/kc-backups
+      mc admin user add local "${kc_backup_access_key}" "${kc_backup_secret_key}"
+      cat > /tmp/kc-backup-policy.json <<POLICY
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
+            "Resource": [
+              "arn:aws:s3:::kc-backups",
+              "arn:aws:s3:::kc-backups/*"
+            ]
+          }
+        ]
+      }
+      POLICY
+      mc admin policy create local kc-backup-writer /tmp/kc-backup-policy.json
+      mc admin policy attach local kc-backup-writer --user "${kc_backup_access_key}"
+      rm -f /tmp/kc-backup-policy.json
       echo "MinIO bootstrap complete"
 
   # ── Observability: node-exporter + Promtail ───────────────────────────────
@@ -286,6 +334,11 @@ runcmd:
   - install -o root -g root -m 0644 /root/staging/minio.service /etc/systemd/system/minio.service
   - install -o root -g root -m 0640 /root/staging/minio.env /etc/default/minio
   - chgrp minio-user /etc/default/minio
+%{ if nimbus_ca_pem != "" ~}
+  # Refresh trust store before MinIO starts so its first OIDC discovery
+  # fetch validates Keycloak's internal-CA cert.
+  - update-ca-certificates
+%{ endif ~}
   - systemctl daemon-reload
   - systemctl enable --now minio.service
 

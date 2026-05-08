@@ -21,6 +21,22 @@ resource "random_password" "nextcloud_db" {
   override_special = "!#%&*+-=?@^_"
 }
 
+# Keycloak DB password — Phase 7. Lives on the same nimbus-rds instance as
+# Nextcloud (no second Postgres VM); provisioned via additional_databases.
+resource "random_password" "keycloak_db" {
+  length           = 32
+  special          = true
+  override_special = "!#%&*+-=?@^_"
+}
+
+# Vault Postgres admin password — Phase 7d. The Vault database secrets engine
+# uses this role to mint short-lived per-app credentials.
+resource "random_password" "vault_db_admin" {
+  length           = 32
+  special          = true
+  override_special = "!#%&*+-=?@^_"
+}
+
 # Module invocation -----------------------------------------------------------
 
 module "nimbus_rds" {
@@ -47,7 +63,22 @@ module "nimbus_rds" {
   initial_db_user     = "nextcloud"
   initial_db_password = random_password.nextcloud_db.result
 
-  allowed_cidr = var.subnets.app.cidr
+  additional_databases = [
+    {
+      name     = "keycloak"
+      user     = "keycloak"
+      password = random_password.keycloak_db.result
+    },
+  ]
+
+  # Phase 7d — Vault database secrets engine admin role (SUPERUSER, lab grade).
+  vault_admin_user     = "vault"
+  vault_admin_password = random_password.vault_db_admin.result
+
+  # Keycloak runs in mgmt subnet (10.0.100.0/24) but talks to Postgres in
+  # data, so widen pg_hba/UFW to cover both app and mgmt for now. Tighten
+  # to per-DB scram-sha-256 rules in Phase 8 if needed.
+  allowed_cidr = "10.0.0.0/16"
 
   # MinIO target for pg-backup pushes (read from module.nimbus_s3 outputs)
   s3_endpoint   = module.nimbus_s3.api_endpoint
@@ -99,5 +130,17 @@ output "nimbus_rds_connection" {
 output "nimbus_rds_password" {
   description = "Run 'terraform output -raw nimbus_rds_password' to reveal"
   value       = random_password.nextcloud_db.result
+  sensitive   = true
+}
+
+output "keycloak_db_password" {
+  description = "Keycloak DB password on nimbus-rds — used by nimbus-iam"
+  value       = random_password.keycloak_db.result
+  sensitive   = true
+}
+
+output "vault_db_admin_password" {
+  description = "Vault's Postgres admin password — fed into the database secrets engine connection in vault_secrets.tf"
+  value       = random_password.vault_db_admin.result
   sensitive   = true
 }

@@ -46,7 +46,18 @@ module "nimbus_alb" {
       server_ip   = var.nimbus_mon_ip
       server_port = 3000
       check       = true
-    }
+    },
+    # Phase 7 — Keycloak. TLS upstream (HAProxy re-encrypts to :8443 with
+    # `ssl verify none`). Both internal and Cloudflare-Tunnel hostnames route
+    # here; Keycloak's KC_HOSTNAME pins the public URL for OIDC discovery.
+    {
+      name        = "keycloak"
+      host_match  = "auth.nimbus.local ${var.keycloak_domain}"
+      server_ip   = var.nimbus_iam_ip
+      server_port = 8443
+      check       = true
+      tls         = true
+    },
   ]
 
   alb_allow_cidrs         = [var.vpc_cidr, "172.18.0.0/12"]
