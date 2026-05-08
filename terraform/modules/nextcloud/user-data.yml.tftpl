@@ -36,6 +36,21 @@ chpasswd:
 
 ssh_pwauth: true
 
+# ── Phase 7 hardening — network readiness gate ────────────────────────────
+# pfSense state-tracking can take 5+ minutes to accept a freshly-built VM
+# at an IP that previously held a different MAC. Without this wait, the
+# package_update_upgrade_install stage hits intermittent DNS/TCP timeouts
+# and cloud-init bails to error state. Polls archive.ubuntu.com:80 every 5s
+# for up to 7.5 minutes; proceeds anyway after that to avoid stuck boots.
+bootcmd:
+  - |
+    for i in $$(seq 1 90); do
+      getent hosts archive.ubuntu.com >/dev/null 2>&1 \
+        && timeout 3 bash -c '</dev/tcp/archive.ubuntu.com/80' 2>/dev/null \
+        && break
+      sleep 5
+    done
+
 package_update: true
 package_upgrade: true
 

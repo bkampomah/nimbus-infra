@@ -9,17 +9,17 @@ locals {
 
   rendered = {
     bastion = templatefile("${path.module}/modules/bastion/user-data.yml.tftpl", {
-      hostname              = "test-bastion"
-      admin_username        = "nimbus"
-      admin_password        = "pass"
-      admin_ssh_keys        = local.fake_ssh_keys
-      static_ip             = "10.0.1.20/24"
-      pfsense_gui_host      = "10.0.1.1"
-      pfsense_gui_port      = 443
-      tunnel_local_port     = 8443
-      ssh_allow_cidrs       = ["192.168.1.0/24"]
-      mgmt_allow_cidrs      = ["10.0.100.0/24"]
-      loki_url              = "http://10.0.100.20:3100"
+      hostname          = "test-bastion"
+      admin_username    = "nimbus"
+      admin_password    = "pass"
+      admin_ssh_keys    = local.fake_ssh_keys
+      static_ip         = "10.0.1.20/24"
+      pfsense_gui_host  = "10.0.1.1"
+      pfsense_gui_port  = 443
+      tunnel_local_port = 8443
+      ssh_allow_cidrs   = ["192.168.1.0/24"]
+      mgmt_allow_cidrs  = ["10.0.100.0/24"]
+      loki_url          = "http://10.0.100.20:3100"
     })
 
     haproxy = templatefile("${path.module}/modules/haproxy/user-data.yml.tftpl", {
