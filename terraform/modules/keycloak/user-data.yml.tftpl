@@ -48,7 +48,7 @@ ssh_pwauth: true
 # for up to 7.5 minutes; proceeds anyway after that to avoid stuck boots.
 bootcmd:
   - |
-    for i in $$(seq 1 90); do
+    for i in $(seq 1 90); do
       getent hosts archive.ubuntu.com >/dev/null 2>&1 \
         && timeout 3 bash -c '</dev/tcp/archive.ubuntu.com/80' 2>/dev/null \
         && break
@@ -442,7 +442,7 @@ runcmd:
   - curl -sSfLo /usr/local/bin/mc.minio https://dl.min.io/client/mc/release/linux-amd64/mc
   - chmod +x /usr/local/bin/mc.minio
   # Configure the s3 alias (HOME=/root forces config under /root/.mc.minio/)
-  - sudo HOME=/root /usr/local/bin/mc.minio --no-color alias set s3 ${backup_s3_endpoint} ${backup_s3_access_key} ${backup_s3_secret_key}
+  - sudo HOME=/root /usr/local/bin/mc.minio --no-color alias set s3 '${backup_s3_endpoint}' '${backup_s3_access_key}' '${backup_s3_secret_key}'
   - install -d -o keycloak -g keycloak -m 0700 /var/backups/keycloak
   - systemctl daemon-reload
   - systemctl enable --now kc-backup.timer

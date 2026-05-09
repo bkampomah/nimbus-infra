@@ -36,7 +36,9 @@ module "nimbus_vault" {
   tls_cert_pem = "${tls_locally_signed_cert.nimbus_vault.cert_pem}${tls_self_signed_cert.nimbus_ca.cert_pem}"
   tls_key_pem  = tls_private_key.nimbus_vault.private_key_pem
 
-  client_allow_cidrs = [var.vpc_cidr]
+  # VPC + operator LAN — Phase 7e fix. Operator-from-LAN was blocked at first
+  # apply because vault provider needed LAN access for terraform.
+  client_allow_cidrs = concat([var.vpc_cidr], ["192.168.0.0/16"])
   mgmt_allow_cidrs   = var.mgmt_allow_cidrs
   loki_url           = module.nimbus_mon.loki_url
 
