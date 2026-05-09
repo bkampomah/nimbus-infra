@@ -64,13 +64,9 @@ module "nimbus_nextcloud" {
   vault_db_role_path      = "${vault_mount.database.path}/creds/${vault_database_secret_backend_role.nextcloud.name}"
 }
 
-resource "powerdns_record" "cloud_app" {
-  zone    = "nimbus.local."
-  name    = "cloud-app.nimbus.local."
-  type    = "A"
-  ttl     = 300
-  records = [var.nimbus_alb_ip]
-}
+# cloud-app.nimbus.local. is declared in dns.tf via the for_each "infra" map —
+# removing this duplicate to avoid the "address already in use" race that hit
+# Stage G.2 when both resources tried to create the same record.
 
 output "nimbus_nextcloud_host" {
   description = "App-subnet IP of nimbus-cloud-01"

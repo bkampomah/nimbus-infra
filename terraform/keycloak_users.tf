@@ -12,12 +12,21 @@ resource "random_password" "nimbus_admin_seed" {
   length           = 20
   special          = true
   override_special = "!#%&*+-=?@^_"
+  # Realm password policy requires at least 1 of each class.
+  min_special = 1
+  min_upper   = 1
+  min_lower   = 1
+  min_numeric = 1
 }
 
 resource "random_password" "nimbus_test_seed" {
   length           = 20
   special          = true
   override_special = "!#%&*+-=?@^_"
+  min_special      = 1
+  min_upper        = 1
+  min_lower        = 1
+  min_numeric      = 1
 }
 
 # ── nimbus-admin (realm admin) ──────────────────────────────────────────────

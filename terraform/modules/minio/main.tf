@@ -111,4 +111,15 @@ resource "proxmox_virtual_environment_vm" "minio" {
   operating_system {
     type = "l26"
   }
+
+  lifecycle {
+    ignore_changes = [
+      initialization[0].user_account,
+      # bpg/proxmox forces VM replace when ip_config or user_data_file_id changes.
+      # CRITICAL for MinIO: replace = data loss. Block reset path requires:
+      #   terraform apply -replace=module.nimbus_s3.proxmox_virtual_environment_vm.minio
+      initialization[0].ip_config,
+      initialization[0].user_data_file_id,
+    ]
+  }
 }

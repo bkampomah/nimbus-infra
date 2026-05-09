@@ -44,7 +44,7 @@ ssh_pwauth: true
 # for up to 7.5 minutes; proceeds anyway after that to avoid stuck boots.
 bootcmd:
   - |
-    for i in $$(seq 1 90); do
+    for i in $(seq 1 90); do
       getent hosts archive.ubuntu.com >/dev/null 2>&1 \
         && timeout 3 bash -c '</dev/tcp/archive.ubuntu.com/80' 2>/dev/null \
         && break

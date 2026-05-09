@@ -41,7 +41,7 @@ ssh_pwauth: true
 # for up to 7.5 minutes; proceeds anyway after that to avoid stuck boots.
 bootcmd:
   - |
-    for i in $$(seq 1 90); do
+    for i in $(seq 1 90); do
       getent hosts archive.ubuntu.com >/dev/null 2>&1 \
         && timeout 3 bash -c '</dev/tcp/archive.ubuntu.com/80' 2>/dev/null \
         && break
@@ -377,7 +377,7 @@ runcmd:
   - chmod +x /usr/local/bin/mc.minio
 
   # Configure the s3 alias for root (HOME=/root forces config under /root/.mc.minio/)
-  - sudo HOME=/root /usr/local/bin/mc.minio --no-color alias set s3 ${s3_endpoint} ${s3_access_key} ${s3_secret_key}
+  - sudo HOME=/root /usr/local/bin/mc.minio --no-color alias set s3 '${s3_endpoint}' '${s3_access_key}' '${s3_secret_key}'
 
   # Pre-create backup dir before systemd timer fires (lesson from 5a)
   - install -d -o postgres -g postgres -m 0700 /var/backups/postgres

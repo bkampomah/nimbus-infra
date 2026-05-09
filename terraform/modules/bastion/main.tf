@@ -88,6 +88,13 @@ resource "proxmox_virtual_environment_vm" "bastion" {
   }
 
   lifecycle {
-    ignore_changes = [initialization[0].user_account]
+    ignore_changes = [
+      initialization[0].user_account,
+      # bpg/proxmox forces VM replace when ip_config or user_data_file_id changes.
+      # Ignore both — to intentionally rebuild:
+      #   terraform apply -replace=module.nimbus_bastion.proxmox_virtual_environment_vm.bastion
+      initialization[0].ip_config,
+      initialization[0].user_data_file_id,
+    ]
   }
 }
