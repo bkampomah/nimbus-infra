@@ -1,17 +1,20 @@
-# terraform/modules/monitoring/main.tf
+# terraform/modules/vault/main.tf
 #
-# nimbus-mon — observability VM (CloudWatch equivalent).
+# nimbus-vault — HashiCorp Vault (Secrets Manager + STS equivalent).
 #
-# What this module does:
-#   - Clones a VM from the golden template
-#   - Installs Prometheus, Grafana, and Loki via cloud-init
-#   - Pre-wires Prometheus + Loki as Grafana data sources via provisioning files
-#   - Provisions the Nimbus infrastructure dashboard in Grafana
-#   - Configures Prometheus scrape targets (node-exporter on every Nimbus VM)
-#   - UFW: Grafana/Prometheus from mgmt only; Loki from full VPC (all VMs push logs)
+# Scope:
+#   - One VM, one Vault instance with integrated Raft storage
+#   - HTTPS-only on :8200 with a cert issued by the Nimbus internal CA
+#   - Service starts SEALED on first boot — `vault operator init` is a manual
+#     one-shot in Phase 7d (recovery keys must NOT live in this repo)
 #
 # What this module does NOT do:
-#   - Install node-exporter or Promtail on other VMs (that's Phase 6b/6c)
+#   - Initialize / unseal Vault (Phase 7d, runbook in docs/runbooks/vault-unseal.md)
+#   - Configure secrets engines or auth methods (Phase 7d via vault_* providers)
+#   - Provision policies or migrate secrets from tfvars (Phase 7e)
+#
+# Cluster mode is single-node Raft. To grow to HA later: bump replication, add
+# nodes pointing at this one as `retry_join`.
 
 terraform {
   required_providers {
@@ -34,27 +37,24 @@ resource "proxmox_virtual_environment_file" "user_data" {
       admin_username     = var.admin_username
       admin_password     = var.admin_password
       admin_ssh_keys     = var.admin_ssh_keys
-      scrape_targets     = var.scrape_targets
+      vault_version      = var.vault_version
+      cluster_name       = var.cluster_name
+      vault_ip           = split("/", var.static_ip)[0]
+      tls_cert_pem       = var.tls_cert_pem
+      tls_key_pem        = var.tls_key_pem
+      client_allow_cidrs = var.client_allow_cidrs
       mgmt_allow_cidrs   = var.mgmt_allow_cidrs
-      loki_allow_cidrs   = var.loki_allow_cidrs
       loki_url           = var.loki_url
-      grafana_root_url   = var.grafana_root_url
-      oidc_issuer_url    = var.oidc_issuer_url
-      oidc_client_id     = var.oidc_client_id
-      oidc_client_secret = var.oidc_client_secret
       nimbus_ca_pem      = var.nimbus_ca_pem
-      grafana_dashboard_json = file(
-        "${path.module}/dashboards/nimbus-aws-infrastructure.json"
-      )
     })
   }
 }
 
-resource "proxmox_virtual_environment_vm" "mon" {
+resource "proxmox_virtual_environment_vm" "vault" {
   name        = var.name
   node_name   = var.proxmox_node
-  description = "Managed by Terraform — Observability (Prometheus + Grafana + Loki)"
-  tags        = ["monitoring", "mgmt-tier", "grafana"]
+  description = "Managed by Terraform — HashiCorp Vault (nimbus-vault)"
+  tags        = ["vault", "secrets", "mgmt-tier"]
 
   clone {
     vm_id = var.template_vm_id
@@ -105,6 +105,10 @@ resource "proxmox_virtual_environment_vm" "mon" {
   lifecycle {
     ignore_changes = [
       initialization[0].user_account,
+      # bpg/proxmox forces VM replace when user_data_file_id or ip_config changes.
+      # Critical here: rebuilding nimbus-vault wipes raft data → all secrets gone.
+      # Take a snapshot before:
+      #   terraform apply -replace=module.nimbus_vault.proxmox_virtual_environment_vm.vault
       initialization[0].ip_config,
       initialization[0].user_data_file_id,
     ]

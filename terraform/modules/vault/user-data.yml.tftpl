@@ -1,0 +1,353 @@
+#cloud-config
+# ---------------------------------------------------------------------------
+# cloud-init for nimbus-vault — HashiCorp Vault on integrated Raft.
+#
+# Pipeline:
+#   1. Create the Nimbus admin user + SSH keys
+#   2. Write TLS material, vault.hcl, and the systemd unit
+#   3. /root/install-vault.sh: download binary, create user, set caps
+#   4. runcmd: UFW, run installer, observability
+#
+# State after first boot:
+#   - vault.service is running but Vault itself is SEALED + uninitialized
+#   - `vault operator init` (Phase 7d) generates unseal/recovery keys
+#   - Until init runs, every API call returns "Vault is sealed" — that's expected
+#
+# Why setcap CAP_IPC_LOCK on the binary:
+#   Vault tries to mlockall() to keep secrets out of swap. Without the cap, it
+#   logs a startup error. Capability is set on the binary, not the user.
+# ---------------------------------------------------------------------------
+
+hostname: ${hostname}
+manage_etc_hosts: true
+preserve_hostname: false
+
+users:
+  - name: ${admin_username}
+    groups: [sudo, adm]
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    lock_passwd: false
+    ssh_authorized_keys:
+%{ for key in admin_ssh_keys ~}
+      - ${key}
+%{ endfor ~}
+
+chpasswd:
+  expire: false
+  list: |
+    ${admin_username}:${admin_password}
+
+ssh_pwauth: true
+
+# ── Phase 7 hardening — network readiness gate ────────────────────────────
+# pfSense state-tracking can take 5+ minutes to accept a freshly-built VM
+# at an IP that previously held a different MAC. Without this wait, the
+# package_update_upgrade_install stage hits intermittent DNS/TCP timeouts
+# and cloud-init bails to error state. Polls archive.ubuntu.com:80 every 5s
+# for up to 7.5 minutes; proceeds anyway after that to avoid stuck boots.
+bootcmd:
+  - |
+    for i in $(seq 1 90); do
+      getent hosts archive.ubuntu.com >/dev/null 2>&1 \
+        && timeout 3 bash -c '</dev/tcp/archive.ubuntu.com/80' 2>/dev/null \
+        && break
+      sleep 5
+    done
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - qemu-guest-agent
+  - ufw
+  - curl
+  - unzip
+  - chrony
+  - libcap2-bin
+  - ca-certificates
+  - unattended-upgrades
+  - jq
+
+write_files:
+%{ if nimbus_ca_pem != "" ~}
+  # ── Nimbus internal CA — Phase 7d ────────────────────────────────────────
+  # Lets Vault's OIDC auth method validate Keycloak's TLS at JWKS-fetch time.
+  - path: /usr/local/share/ca-certificates/nimbus-ca.crt
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${base64encode(nimbus_ca_pem)}
+%{ endif ~}
+
+  # ── TLS material (issued by Nimbus internal CA in certs.tf) ───────────────
+  # Owner is root:root at write time — vault user is created in installer,
+  # which fixes ownership before starting the service.
+  - path: /etc/vault.d/tls/server.crt
+    owner: root:root
+    permissions: '0600'
+    encoding: b64
+    content: ${base64encode(tls_cert_pem)}
+
+  - path: /etc/vault.d/tls/server.key
+    owner: root:root
+    permissions: '0600'
+    encoding: b64
+    content: ${base64encode(tls_key_pem)}
+
+  # ── Vault config ──────────────────────────────────────────────────────────
+  # Single-node Raft. To grow to HA: deploy more nodes with retry_join blocks
+  # pointing at this api_addr.
+  - path: /etc/vault.d/vault.hcl
+    owner: root:root
+    permissions: '0640'
+    content: |
+      ui = true
+      cluster_name = "${cluster_name}"
+      disable_mlock = false
+
+      storage "raft" {
+        path    = "/opt/vault/data"
+        node_id = "${hostname}"
+      }
+
+      listener "tcp" {
+        address       = "0.0.0.0:8200"
+        tls_cert_file = "/etc/vault.d/tls/server.crt"
+        tls_key_file  = "/etc/vault.d/tls/server.key"
+      }
+
+      api_addr     = "https://${vault_ip}:8200"
+      cluster_addr = "https://${vault_ip}:8201"
+
+      # Audit devices are enabled at runtime via `vault audit enable file
+      # path=/var/log/vault/audit.log` — not in HCL, since enabling here would
+      # crash startup before the file exists.
+
+  # ── systemd unit ──────────────────────────────────────────────────────────
+  - path: /etc/systemd/system/vault.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=HashiCorp Vault
+      Documentation=https://developer.hashicorp.com/vault/docs
+      Requires=network-online.target
+      After=network-online.target
+      ConditionFileNotEmpty=/etc/vault.d/vault.hcl
+
+      [Service]
+      Type=notify
+      User=vault
+      Group=vault
+      ProtectSystem=full
+      ProtectHome=read-only
+      PrivateTmp=yes
+      PrivateDevices=yes
+      SecureBits=keep-caps
+      AmbientCapabilities=CAP_IPC_LOCK
+      Capabilities=CAP_IPC_LOCK+ep
+      CapabilityBoundingSet=CAP_SYSLOG CAP_IPC_LOCK
+      NoNewPrivileges=yes
+      ExecStart=/usr/local/bin/vault server -config=/etc/vault.d/vault.hcl
+      ExecReload=/bin/kill --signal HUP $MAINPID
+      KillMode=process
+      Restart=on-failure
+      RestartSec=5
+      TimeoutStopSec=30
+      LimitNOFILE=65536
+      LimitMEMLOCK=infinity
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # ── Vault installer ───────────────────────────────────────────────────────
+  - path: /root/install-vault.sh
+    owner: root:root
+    permissions: '0700'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      VAULT_VERSION="${vault_version}"
+      VAULT_BIN=/usr/local/bin/vault
+      VAULT_ZIP="vault_$${VAULT_VERSION}_linux_amd64.zip"
+      VAULT_URL="https://releases.hashicorp.com/vault/$${VAULT_VERSION}/$${VAULT_ZIP}"
+
+      # Service user first — service won't start without it.
+      useradd --system --home /etc/vault.d --shell /bin/false vault 2>/dev/null || true
+      install -d -o vault -g vault -m 0750 /etc/vault.d /etc/vault.d/tls /opt/vault /opt/vault/data /var/log/vault
+
+      if [ ! -x "$${VAULT_BIN}" ]; then
+        echo "== Installing Vault $${VAULT_VERSION}"
+        cd /tmp
+        curl -fsSL -o "$${VAULT_ZIP}" "$${VAULT_URL}"
+        unzip -o "$${VAULT_ZIP}"
+        install -m 0755 vault "$${VAULT_BIN}"
+        rm -f "$${VAULT_ZIP}" vault
+      fi
+
+      # mlock requires CAP_IPC_LOCK on the binary (vault user is unprivileged).
+      setcap cap_ipc_lock=+ep "$${VAULT_BIN}"
+
+      # Hand TLS + config files to vault user.
+      chown -R vault:vault /etc/vault.d /opt/vault /var/log/vault
+      chmod 0600 /etc/vault.d/tls/server.crt /etc/vault.d/tls/server.key
+      chmod 0640 /etc/vault.d/vault.hcl
+
+      # /etc/profile.d shim so operator shells default to the local API.
+      cat > /etc/profile.d/vault.sh <<EOF
+      export VAULT_ADDR=https://${vault_ip}:8200
+      export VAULT_CACERT=/etc/vault.d/tls/server.crt
+      EOF
+      chmod 0644 /etc/profile.d/vault.sh
+
+      systemctl daemon-reload
+      systemctl enable --now vault
+
+  # ── Observability: node-exporter + Promtail ───────────────────────────────
+  - path: /etc/systemd/system/node-exporter.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Prometheus node-exporter
+      After=network.target
+
+      [Service]
+      User=node_exporter
+      Group=node_exporter
+      ExecStart=/usr/local/bin/node_exporter
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/promtail/promtail.yml
+    owner: root:root
+    permissions: '0644'
+    content: |
+      server:
+        http_listen_port: 9080
+        grpc_listen_port: 0
+
+      positions:
+        filename: /var/lib/promtail/positions.yaml
+
+      clients:
+        - url: ${loki_url}/loki/api/v1/push
+
+      scrape_configs:
+        - job_name: system
+          static_configs:
+            - targets: [localhost]
+              labels:
+                host: ${hostname}
+                __path__: /var/log/{syslog,auth.log}
+
+        - job_name: vault-audit
+          static_configs:
+            - targets: [localhost]
+              labels:
+                host: ${hostname}
+                job: vault-audit
+                __path__: /var/log/vault/audit.log
+
+        - job_name: vault
+          journal:
+            max_age: 12h
+            labels:
+              host: ${hostname}
+              job: vault
+          relabel_configs:
+            - source_labels: ['__journal__systemd_unit']
+              regex: 'vault\.service'
+              action: keep
+
+  - path: /etc/systemd/system/promtail.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Promtail log shipper
+      After=network.target
+
+      [Service]
+      User=promtail
+      Group=promtail
+      ExecStart=/usr/local/bin/promtail -config.file=/etc/promtail/promtail.yml
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /root/install-observability.sh
+    owner: root:root
+    permissions: '0700'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      NODE_EXPORTER_VERSION="1.8.2"
+      PROMTAIL_VERSION="3.1.0"
+
+      useradd --system --no-create-home --shell /bin/false node_exporter 2>/dev/null || true
+      useradd --system --no-create-home --shell /bin/false promtail 2>/dev/null || true
+      mkdir -p /etc/promtail /var/lib/promtail
+      chown promtail:promtail /var/lib/promtail /etc/promtail
+
+      if [ ! -f /usr/local/bin/node_exporter ]; then
+        curl -fsSL -o /tmp/ne.tar.gz \
+          "https://github.com/prometheus/node_exporter/releases/download/v$${NODE_EXPORTER_VERSION}/node_exporter-$${NODE_EXPORTER_VERSION}.linux-amd64.tar.gz"
+        tar -xzf /tmp/ne.tar.gz -C /tmp/
+        cp "/tmp/node_exporter-$${NODE_EXPORTER_VERSION}.linux-amd64/node_exporter" /usr/local/bin/
+        chmod +x /usr/local/bin/node_exporter
+        rm -rf "/tmp/node_exporter-$${NODE_EXPORTER_VERSION}.linux-amd64" /tmp/ne.tar.gz
+      fi
+
+      if [ ! -f /usr/local/bin/promtail ]; then
+        curl -fsSL -o /tmp/promtail.zip \
+          "https://github.com/grafana/loki/releases/download/v$${PROMTAIL_VERSION}/promtail-linux-amd64.zip"
+        unzip -jo /tmp/promtail.zip "promtail-linux-amd64" -d /usr/local/bin/
+        mv /usr/local/bin/promtail-linux-amd64 /usr/local/bin/promtail
+        chmod +x /usr/local/bin/promtail
+        rm -f /tmp/promtail.zip
+      fi
+
+      # Promtail needs to read /var/log/vault/audit.log (mode 0640 vault:vault).
+      # Add promtail to the vault group so the audit scrape works without
+      # widening file permissions.
+      usermod -aG vault promtail 2>/dev/null || true
+
+      systemctl daemon-reload
+      systemctl enable --now node-exporter
+      systemctl enable --now promtail
+
+runcmd:
+  - [ systemctl, enable, --now, qemu-guest-agent ]
+  - [ systemctl, enable, --now, chrony ]
+
+  # UFW: SSH + node-exporter from mgmt; Vault API from broader VPC.
+  - ufw --force reset
+  - ufw default deny incoming
+  - ufw default allow outgoing
+%{ for cidr in mgmt_allow_cidrs ~}
+  - ufw allow from ${cidr} to any port 22   proto tcp comment 'SSH from mgmt'
+  - ufw allow from ${cidr} to any port 9100 proto tcp comment 'node-exporter from mon'
+%{ endfor ~}
+%{ for cidr in client_allow_cidrs ~}
+  - ufw allow from ${cidr} to any port 8200 proto tcp comment 'Vault API'
+  - ufw allow from ${cidr} to any port 8201 proto tcp comment 'Vault cluster'
+%{ endfor ~}
+  - ufw --force enable
+
+%{ if nimbus_ca_pem != "" ~}
+  - update-ca-certificates
+%{ endif ~}
+
+  - [ bash, /root/install-vault.sh ]
+  - [ bash, /root/install-observability.sh ]
+
+final_message: "nimbus-vault ${hostname} ready after $${UPTIME} seconds (Vault — sealed; run operator init)"

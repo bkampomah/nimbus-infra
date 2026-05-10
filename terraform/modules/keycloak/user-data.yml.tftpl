@@ -1,0 +1,451 @@
+#cloud-config
+# ---------------------------------------------------------------------------
+# cloud-init for nimbus-iam — Keycloak 25 (Cognito / IAM IdP equivalent).
+#
+# Pipeline:
+#   1. Create the Nimbus admin user + SSH keys
+#   2. Drop TLS cert + key + Keycloak env file + systemd unit
+#   3. /root/install-keycloak.sh: install Java 21, fetch tarball, build
+#   4. runcmd: UFW, run installer, enable service, observability
+#
+# What this DOES NOT do:
+#   - Create realms/clients (Phase 7b uses the mrparkers/keycloak provider
+#     against the running instance once it's reachable)
+#   - Configure OIDC for individual apps (Phase 7c)
+#
+# Keycloak listens on :8443 only (HTTPS). HTTP is disabled. The bootstrap
+# admin is created from KEYCLOAK_ADMIN env vars the first time the master
+# realm is empty — rotate it via the admin console immediately.
+# ---------------------------------------------------------------------------
+
+hostname: ${hostname}
+manage_etc_hosts: true
+preserve_hostname: false
+
+users:
+  - name: ${admin_username}
+    groups: [sudo, adm]
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    lock_passwd: false
+    ssh_authorized_keys:
+%{ for key in admin_ssh_keys ~}
+      - ${key}
+%{ endfor ~}
+
+chpasswd:
+  expire: false
+  list: |
+    ${admin_username}:${admin_password}
+
+ssh_pwauth: true
+
+# ── Phase 7 hardening — network readiness gate ────────────────────────────
+# pfSense state-tracking can take 5+ minutes to accept a freshly-built VM
+# at an IP that previously held a different MAC. Without this wait, the
+# package_update_upgrade_install stage hits intermittent DNS/TCP timeouts
+# and cloud-init bails to error state. Polls archive.ubuntu.com:80 every 5s
+# for up to 7.5 minutes; proceeds anyway after that to avoid stuck boots.
+bootcmd:
+  - |
+    for i in $(seq 1 90); do
+      getent hosts archive.ubuntu.com >/dev/null 2>&1 \
+        && timeout 3 bash -c '</dev/tcp/archive.ubuntu.com/80' 2>/dev/null \
+        && break
+      sleep 5
+    done
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - qemu-guest-agent
+  - ufw
+  - curl
+  - tar
+  - chrony
+  - openjdk-21-jre-headless
+  - ca-certificates
+  - unattended-upgrades
+
+write_files:
+  # ── TLS material (issued by Nimbus internal CA in certs.tf) ───────────────
+  # Base64-encoded so PEM block headers don't fight YAML indentation.
+  # Owner is root:root here — `keycloak` group doesn't exist until install
+  # script creates the system user. Installer fixes ownership to keycloak.
+  - path: /etc/keycloak/server.crt
+    owner: root:root
+    permissions: '0600'
+    encoding: b64
+    content: ${base64encode(tls_cert_pem)}
+
+  - path: /etc/keycloak/server.key
+    owner: root:root
+    permissions: '0600'
+    encoding: b64
+    content: ${base64encode(tls_key_pem)}
+
+  # ── Keycloak runtime config (read by systemd EnvironmentFile=) ────────────
+  # KC_HOSTNAME drives OIDC discovery + redirect URIs. KC_HOSTNAME_STRICT=false
+  # lets internal admins reach the same instance via auth.nimbus.local without
+  # rewriting issuer URLs.
+  - path: /etc/keycloak/keycloak.env
+    owner: root:root
+    permissions: '0600'
+    content: |
+      KC_DB=postgres
+      KC_DB_URL=jdbc:postgresql://${db_host}:${db_port}/${db_name}
+      KC_DB_USERNAME=${db_user}
+      KC_DB_PASSWORD=${db_password}
+
+      KC_HOSTNAME=https://${keycloak_hostname}
+      KC_HOSTNAME_STRICT=false
+      KC_HOSTNAME_STRICT_HTTPS=false
+      KC_PROXY_HEADERS=xforwarded
+
+      KC_HTTP_ENABLED=false
+      KC_HTTPS_PORT=8443
+      KC_HTTPS_CERTIFICATE_FILE=/etc/keycloak/server.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE=/etc/keycloak/server.key
+
+      KC_HEALTH_ENABLED=true
+      KC_METRICS_ENABLED=true
+      KC_LOG=console
+      KC_LOG_LEVEL=info
+
+      # Bootstrap admin — only consulted on first start when the master
+      # realm has no admin user. Rotate immediately via the admin console.
+      KEYCLOAK_ADMIN=${keycloak_admin_user}
+      KEYCLOAK_ADMIN_PASSWORD=${keycloak_admin_password}
+
+      JAVA_OPTS_APPEND=-Djava.net.preferIPv4Stack=true
+
+  # ── systemd unit ──────────────────────────────────────────────────────────
+  - path: /etc/systemd/system/keycloak.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Keycloak Identity Provider
+      Documentation=https://www.keycloak.org/server/all-config
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=keycloak
+      Group=keycloak
+      EnvironmentFile=/etc/keycloak/keycloak.env
+      ExecStart=/opt/keycloak/bin/kc.sh start --optimized
+      Restart=on-failure
+      RestartSec=10
+      LimitNOFILE=102400
+
+      # Hardening
+      NoNewPrivileges=true
+      ProtectSystem=full
+      ProtectHome=true
+      PrivateTmp=true
+      ReadWritePaths=/opt/keycloak/data /var/log/keycloak
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # ── Keycloak installer ────────────────────────────────────────────────────
+  - path: /root/install-keycloak.sh
+    owner: root:root
+    permissions: '0700'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      KC_VERSION="${keycloak_version}"
+      KC_HOME=/opt/keycloak
+      KC_TARBALL="keycloak-$${KC_VERSION}.tar.gz"
+      KC_URL="https://github.com/keycloak/keycloak/releases/download/$${KC_VERSION}/$${KC_TARBALL}"
+
+      # Service user first — if download fails, systemd won't bail with USER errors.
+      useradd --system --home "$${KC_HOME}" --shell /bin/false keycloak 2>/dev/null || true
+      install -d -o keycloak -g keycloak -m 0750 /var/log/keycloak
+
+      if [ ! -x "$${KC_HOME}/bin/kc.sh" ]; then
+        echo "== Installing Keycloak $${KC_VERSION}"
+        cd /tmp
+        curl -fsSL -o "$${KC_TARBALL}" "$${KC_URL}"
+        tar -xzf "$${KC_TARBALL}"
+        mv "keycloak-$${KC_VERSION}" "$${KC_HOME}"
+        rm -f "$${KC_TARBALL}"
+        chown -R keycloak:keycloak "$${KC_HOME}"
+      fi
+
+      # Ensure cert/key/env files (deferred-write) end up readable by keycloak
+      chgrp keycloak /etc/keycloak/server.crt /etc/keycloak/server.key /etc/keycloak/keycloak.env || true
+      chmod 0640    /etc/keycloak/server.crt /etc/keycloak/server.key /etc/keycloak/keycloak.env || true
+
+      # Build once — bakes the postgres feature + production opts. Subsequent
+      # starts use --optimized to skip rebuild and cut start time ~10s.
+      if [ ! -f "$${KC_HOME}/.kc-built" ]; then
+        echo "== kc.sh build (one-time)"
+        sudo -u keycloak \
+          KC_DB=postgres \
+          KC_HEALTH_ENABLED=true \
+          KC_METRICS_ENABLED=true \
+          "$${KC_HOME}/bin/kc.sh" build
+        touch "$${KC_HOME}/.kc-built"
+        chown keycloak:keycloak "$${KC_HOME}/.kc-built"
+      fi
+
+      systemctl daemon-reload
+      systemctl enable --now keycloak
+
+  # ── Realm export backup (Phase 7b) ────────────────────────────────────────
+  # Nightly: stop keycloak → kc.sh export → tar → push to MinIO → start.
+  # Brief downtime (~10s) at 03:00. Phase 8 hardening: switch to admin REST
+  # API export to remove the downtime window.
+%{ if backup_s3_endpoint != "" ~}
+  - path: /usr/local/bin/kc-backup.sh
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      BACKUP_DIR=/var/backups/keycloak
+      RETENTION_DAYS=14
+      TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+      HOSTNAME=$(hostname -s)
+      KC_HOME=/opt/keycloak
+      EXPORT_DIR="$${BACKUP_DIR}/kc-export-$${TIMESTAMP}"
+      DUMP_FILE="$${BACKUP_DIR}/kc-export-$${TIMESTAMP}.tar.gz"
+
+      MC=/usr/local/bin/mc.minio
+      S3_ALIAS=s3
+      S3_BUCKET=${backup_s3_bucket}
+      S3_PREFIX=$${HOSTNAME}
+
+      install -d -o keycloak -g keycloak -m 0700 "$${BACKUP_DIR}" "$${EXPORT_DIR}"
+
+      # Stop keycloak briefly — kc.sh export needs an offline DB lock.
+      logger "kc-backup: stopping keycloak for offline export"
+      systemctl stop keycloak
+
+      # restart even if export fails
+      trap 'systemctl start keycloak' EXIT
+
+%{ for realm in backup_realms ~}
+      sudo -u keycloak \
+        KC_DB=postgres \
+        "$${KC_HOME}/bin/kc.sh" export \
+          --dir "$${EXPORT_DIR}" \
+          --realm "${realm}" \
+          --users different_files \
+        || logger -p user.warning "kc-backup: export of ${realm} failed"
+%{ endfor ~}
+
+      systemctl start keycloak
+      trap - EXIT
+
+      tar -czf "$${DUMP_FILE}" -C "$${BACKUP_DIR}" "$(basename "$${EXPORT_DIR}")"
+      chmod 600 "$${DUMP_FILE}"
+      rm -rf "$${EXPORT_DIR}"
+
+      if [ ! -s "$${DUMP_FILE}" ]; then
+        logger -p user.err "kc-backup: FAILED — local dump empty"
+        exit 1
+      fi
+
+      LOCAL_SIZE=$(du -h "$${DUMP_FILE}" | cut -f1)
+      logger "kc-backup: local dump ok $${DUMP_FILE} ($${LOCAL_SIZE})"
+
+      # Push to MinIO (don't fail the whole job if push fails)
+      if [ -x "$${MC}" ] && "$${MC}" --no-color alias list "$${S3_ALIAS}" >/dev/null 2>&1; then
+        TARGET="$${S3_ALIAS}/$${S3_BUCKET}/$${S3_PREFIX}/$(basename "$${DUMP_FILE}")"
+        if "$${MC}" --no-color cp "$${DUMP_FILE}" "$${TARGET}" >/dev/null 2>&1; then
+          logger "kc-backup: pushed to $${TARGET}"
+        else
+          logger -p user.warning "kc-backup: WARNING — failed to push to $${TARGET}"
+        fi
+      else
+        logger -p user.warning "kc-backup: WARNING — mc.minio not configured"
+      fi
+
+      # Rotate local copies
+      find "$${BACKUP_DIR}" -name "kc-export-*.tar.gz" -mtime "+$${RETENTION_DAYS}" -delete
+
+  - path: /etc/systemd/system/kc-backup.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Keycloak realm export backup
+      Documentation=https://www.keycloak.org/server/importExport
+      After=keycloak.service network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/kc-backup.sh
+      StandardOutput=journal
+      StandardError=journal
+
+      # mc.minio config under /root/.mc.minio (auto-derived from binary name).
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ReadWritePaths=/var/backups/keycloak /root/.mc.minio /opt/keycloak/data
+      PrivateTmp=true
+
+  - path: /etc/systemd/system/kc-backup.timer
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Daily Keycloak realm export
+
+      [Timer]
+      OnCalendar=*-*-* 03:00:00
+      RandomizedDelaySec=15min
+      Persistent=true
+      Unit=kc-backup.service
+
+      [Install]
+      WantedBy=timers.target
+%{ endif ~}
+
+  # ── Observability: node-exporter + Promtail ───────────────────────────────
+  - path: /etc/systemd/system/node-exporter.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Prometheus node-exporter
+      After=network.target
+
+      [Service]
+      User=node_exporter
+      Group=node_exporter
+      ExecStart=/usr/local/bin/node_exporter
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/promtail/promtail.yml
+    owner: root:root
+    permissions: '0644'
+    content: |
+      server:
+        http_listen_port: 9080
+        grpc_listen_port: 0
+
+      positions:
+        filename: /var/lib/promtail/positions.yaml
+
+      clients:
+        - url: ${loki_url}/loki/api/v1/push
+
+      scrape_configs:
+        - job_name: system
+          static_configs:
+            - targets: [localhost]
+              labels:
+                host: ${hostname}
+                __path__: /var/log/{syslog,auth.log}
+
+        - job_name: keycloak
+          journal:
+            max_age: 12h
+            labels:
+              host: ${hostname}
+              job: keycloak
+          relabel_configs:
+            - source_labels: ['__journal__systemd_unit']
+              regex: 'keycloak\.service'
+              action: keep
+
+  - path: /etc/systemd/system/promtail.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Promtail log shipper
+      After=network.target
+
+      [Service]
+      User=promtail
+      Group=promtail
+      ExecStart=/usr/local/bin/promtail -config.file=/etc/promtail/promtail.yml
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /root/install-observability.sh
+    owner: root:root
+    permissions: '0700'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      NODE_EXPORTER_VERSION="1.8.2"
+      PROMTAIL_VERSION="3.1.0"
+
+      useradd --system --no-create-home --shell /bin/false node_exporter 2>/dev/null || true
+      useradd --system --no-create-home --shell /bin/false promtail 2>/dev/null || true
+      mkdir -p /etc/promtail /var/lib/promtail
+      chown promtail:promtail /var/lib/promtail /etc/promtail
+
+      if [ ! -f /usr/local/bin/node_exporter ]; then
+        curl -fsSL -o /tmp/ne.tar.gz \
+          "https://github.com/prometheus/node_exporter/releases/download/v$${NODE_EXPORTER_VERSION}/node_exporter-$${NODE_EXPORTER_VERSION}.linux-amd64.tar.gz"
+        tar -xzf /tmp/ne.tar.gz -C /tmp/
+        cp "/tmp/node_exporter-$${NODE_EXPORTER_VERSION}.linux-amd64/node_exporter" /usr/local/bin/
+        chmod +x /usr/local/bin/node_exporter
+        rm -rf "/tmp/node_exporter-$${NODE_EXPORTER_VERSION}.linux-amd64" /tmp/ne.tar.gz
+      fi
+
+      if [ ! -f /usr/local/bin/promtail ]; then
+        curl -fsSL -o /tmp/promtail.zip \
+          "https://github.com/grafana/loki/releases/download/v$${PROMTAIL_VERSION}/promtail-linux-amd64.zip"
+        unzip -jo /tmp/promtail.zip "promtail-linux-amd64" -d /usr/local/bin/
+        mv /usr/local/bin/promtail-linux-amd64 /usr/local/bin/promtail
+        chmod +x /usr/local/bin/promtail
+        rm -f /tmp/promtail.zip
+      fi
+
+      systemctl daemon-reload
+      systemctl enable --now node-exporter
+      systemctl enable --now promtail
+
+runcmd:
+  - [ systemctl, enable, --now, qemu-guest-agent ]
+  - [ systemctl, enable, --now, chrony ]
+
+  # UFW: SSH + Keycloak admin from mgmt; Keycloak :8443 also from ALB subnet.
+  - ufw --force reset
+  - ufw default deny incoming
+  - ufw default allow outgoing
+%{ for cidr in mgmt_allow_cidrs ~}
+  - ufw allow from ${cidr} to any port 22   proto tcp comment 'SSH from mgmt'
+  - ufw allow from ${cidr} to any port 8443 proto tcp comment 'Keycloak admin from mgmt'
+  - ufw allow from ${cidr} to any port 9100 proto tcp comment 'node-exporter from mon'
+%{ endfor ~}
+  - ufw allow from ${alb_cidr} to any port 8443 proto tcp comment 'Keycloak from ALB'
+  - ufw --force enable
+
+  - [ bash, /root/install-keycloak.sh ]
+  - [ bash, /root/install-observability.sh ]
+
+%{ if backup_s3_endpoint != "" ~}
+  # MinIO client — named mc.minio to avoid /usr/bin/mc (Midnight Commander) collision.
+  - curl -sSfLo /usr/local/bin/mc.minio https://dl.min.io/client/mc/release/linux-amd64/mc
+  - chmod +x /usr/local/bin/mc.minio
+  # Configure the s3 alias (HOME=/root forces config under /root/.mc.minio/)
+  - sudo HOME=/root /usr/local/bin/mc.minio --no-color alias set s3 '${backup_s3_endpoint}' '${backup_s3_access_key}' '${backup_s3_secret_key}'
+  - install -d -o keycloak -g keycloak -m 0700 /var/backups/keycloak
+  - systemctl daemon-reload
+  - systemctl enable --now kc-backup.timer
+%{ endif ~}
+
+final_message: "nimbus-iam ${hostname} ready after $${UPTIME} seconds (Keycloak)"

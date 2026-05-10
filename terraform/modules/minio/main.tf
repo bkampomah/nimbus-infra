@@ -28,10 +28,18 @@ resource "proxmox_virtual_environment_file" "user_data" {
       pgbackup_secret_key  = var.pgbackup_secret_key
       nextcloud_access_key = var.nextcloud_access_key
       nextcloud_secret_key = var.nextcloud_secret_key
+      kc_backup_access_key = var.kc_backup_access_key
+      kc_backup_secret_key = var.kc_backup_secret_key
       api_allow_cidrs      = var.api_allow_cidrs
       console_allow_cidrs  = var.console_allow_cidrs
       mgmt_allow_cidrs     = var.mgmt_allow_cidrs
       loki_url             = var.loki_url
+      oidc_issuer_url      = var.oidc_issuer_url
+      oidc_client_id       = var.oidc_client_id
+      oidc_client_secret   = var.oidc_client_secret
+      oidc_role_policy     = var.oidc_role_policy
+      nimbus_ca_pem        = var.nimbus_ca_pem
+      console_redirect_uri = "http://${split("/", var.static_ip)[0]}:9001/oauth_callback"
     })
     file_name = "${var.name}-user-data.yml"
   }
@@ -102,5 +110,16 @@ resource "proxmox_virtual_environment_vm" "minio" {
 
   operating_system {
     type = "l26"
+  }
+
+  lifecycle {
+    ignore_changes = [
+      initialization[0].user_account,
+      # bpg/proxmox forces VM replace when ip_config or user_data_file_id changes.
+      # CRITICAL for MinIO: replace = data loss. Block reset path requires:
+      #   terraform apply -replace=module.nimbus_s3.proxmox_virtual_environment_vm.minio
+      initialization[0].ip_config,
+      initialization[0].user_data_file_id,
+    ]
   }
 }

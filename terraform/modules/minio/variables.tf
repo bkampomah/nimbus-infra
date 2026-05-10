@@ -164,6 +164,24 @@ variable "nextcloud_secret_key" {
   }
 }
 
+# Phase 7b — kc-backups bucket for nightly Keycloak realm exports.
+variable "kc_backup_access_key" {
+  description = "Service account access key for the Keycloak realm-export writer (limited to kc-backups bucket)"
+  type        = string
+  default     = "kc-backup"
+}
+
+variable "kc_backup_secret_key" {
+  description = "Service account secret key for kc-backup (supply via random_password)"
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.kc_backup_secret_key) >= 8
+    error_message = "MinIO secret key must be at least 8 characters."
+  }
+}
+
 # -----------------------------------------------------------------------------
 # Access controls (UFW)
 # -----------------------------------------------------------------------------
@@ -186,4 +204,38 @@ variable "loki_url" {
   description = "Promtail push endpoint on nimbus-mon (e.g. http://10.0.100.20:3100). Empty string disables Promtail."
   type        = string
   default     = "http://10.0.100.20:3100"
+}
+
+# ── Phase 7c — MinIO console OIDC SSO via Keycloak ─────────────────────────
+# Empty oidc_issuer_url disables OIDC env vars.
+
+variable "oidc_issuer_url" {
+  description = "OIDC issuer URL (e.g. https://auth.nimbusnode.org/realms/nimbus). Empty disables OIDC."
+  type        = string
+  default     = ""
+}
+
+variable "oidc_client_id" {
+  description = "OAuth client_id registered in Keycloak for MinIO console"
+  type        = string
+  default     = ""
+}
+
+variable "oidc_client_secret" {
+  description = "OAuth client_secret for the MinIO console client"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "oidc_role_policy" {
+  description = "MinIO IAM policy granted to all OIDC-authenticated users. Phase 8 should swap to claim-based per-group policies."
+  type        = string
+  default     = "consoleAdmin"
+}
+
+variable "nimbus_ca_pem" {
+  description = "Internal CA cert PEM. Installed into the system trust store so MinIO validates Keycloak's TLS. Empty skips."
+  type        = string
+  default     = ""
 }

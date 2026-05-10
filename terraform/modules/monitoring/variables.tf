@@ -67,3 +67,38 @@ variable "loki_url" {
   type        = string
   default     = "http://10.0.100.20:3100"
 }
+
+# ── Phase 7c — Grafana OIDC SSO via Keycloak ───────────────────────────────
+# Empty oidc_issuer_url disables OIDC env vars — keeps the module backward-
+# compatible with Phase 6 deploys.
+
+variable "grafana_root_url" {
+  description = "Public root URL Grafana advertises (e.g. https://mon.nimbus.local). Used by GF_SERVER_ROOT_URL — required for OIDC redirects."
+  type        = string
+  default     = "https://mon.nimbus.local"
+}
+
+variable "oidc_issuer_url" {
+  description = "OIDC issuer URL (e.g. https://auth.nimbusnode.org/realms/nimbus). Empty disables OIDC."
+  type        = string
+  default     = ""
+}
+
+variable "oidc_client_id" {
+  description = "OAuth client_id registered in Keycloak for Grafana"
+  type        = string
+  default     = ""
+}
+
+variable "oidc_client_secret" {
+  description = "OAuth client_secret for the Grafana client"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "nimbus_ca_pem" {
+  description = "Internal CA cert PEM. Installed into the system trust store so Grafana validates Keycloak's TLS. Empty skips."
+  type        = string
+  default     = ""
+}

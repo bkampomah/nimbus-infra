@@ -33,6 +33,21 @@ chpasswd:
 
 ssh_pwauth: true
 
+# ── Phase 7 hardening — network readiness gate ────────────────────────────
+# pfSense state-tracking can take 5+ minutes to accept a freshly-built VM
+# at an IP that previously held a different MAC. Without this wait, the
+# package_update_upgrade_install stage hits intermittent DNS/TCP timeouts
+# and cloud-init bails to error state. Polls archive.ubuntu.com:80 every 5s
+# for up to 7.5 minutes; proceeds anyway after that to avoid stuck boots.
+bootcmd:
+  - |
+    for i in $(seq 1 90); do
+      getent hosts archive.ubuntu.com >/dev/null 2>&1 \
+        && timeout 3 bash -c '</dev/tcp/archive.ubuntu.com/80' 2>/dev/null \
+        && break
+      sleep 5
+    done
+
 package_update: true
 package_upgrade: true
 
@@ -106,6 +121,41 @@ write_files:
         sudo -u postgres createdb -O ${initial_db_user} ${initial_db_name}
       fi
 
+%{ for db in additional_databases ~}
+      # Additional database: ${db.name}
+      sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
+      DO $pg$
+      BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${db.user}') THEN
+          CREATE ROLE ${db.user} LOGIN PASSWORD '${db.password}';
+        ELSE
+          ALTER ROLE ${db.user} WITH PASSWORD '${db.password}';
+        END IF;
+      END
+      $pg$;
+      SQL
+
+      if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${db.name}'" | grep -q 1; then
+        sudo -u postgres createdb -O ${db.user} ${db.name}
+      fi
+
+%{ endfor ~}
+%{ if vault_admin_user != "" ~}
+      # Phase 7d — Vault database secrets engine admin role.
+      # SUPERUSER for homelab; tighten in Phase 8.
+      sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
+      DO $pg$
+      BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${vault_admin_user}') THEN
+          CREATE ROLE ${vault_admin_user} LOGIN SUPERUSER PASSWORD '${vault_admin_password}';
+        ELSE
+          ALTER ROLE ${vault_admin_user} WITH SUPERUSER PASSWORD '${vault_admin_password}';
+        END IF;
+      END
+      $pg$;
+      SQL
+
+%{ endif ~}
       echo "nimbus-rds db bootstrap complete."
 
   # ------------------------------------------------------------------------
@@ -327,7 +377,7 @@ runcmd:
   - chmod +x /usr/local/bin/mc.minio
 
   # Configure the s3 alias for root (HOME=/root forces config under /root/.mc.minio/)
-  - sudo HOME=/root /usr/local/bin/mc.minio --no-color alias set s3 ${s3_endpoint} ${s3_access_key} ${s3_secret_key}
+  - sudo HOME=/root /usr/local/bin/mc.minio --no-color alias set s3 '${s3_endpoint}' '${s3_access_key}' '${s3_secret_key}'
 
   # Pre-create backup dir before systemd timer fires (lesson from 5a)
   - install -d -o postgres -g postgres -m 0700 /var/backups/postgres

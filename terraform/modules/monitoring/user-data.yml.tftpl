@@ -36,6 +36,21 @@ chpasswd:
 
 ssh_pwauth: true
 
+# ── Phase 7 hardening — network readiness gate ────────────────────────────
+# pfSense state-tracking can take 5+ minutes to accept a freshly-built VM
+# at an IP that previously held a different MAC. Without this wait, the
+# package_update_upgrade_install stage hits intermittent DNS/TCP timeouts
+# and cloud-init bails to error state. Polls archive.ubuntu.com:80 every 5s
+# for up to 7.5 minutes; proceeds anyway after that to avoid stuck boots.
+bootcmd:
+  - |
+    for i in $(seq 1 90); do
+      getent hosts archive.ubuntu.com >/dev/null 2>&1 \
+        && timeout 3 bash -c '</dev/tcp/archive.ubuntu.com/80' 2>/dev/null \
+        && break
+      sleep 5
+    done
+
 package_update: true
 package_upgrade: true
 
@@ -51,6 +66,42 @@ packages:
   - unattended-upgrades
 
 write_files:
+%{ if nimbus_ca_pem != "" ~}
+  # ── Nimbus internal CA — Phase 7c ────────────────────────────────────────
+  # Lets Grafana's outbound OIDC calls to Keycloak validate. Refreshed in
+  # runcmd via update-ca-certificates.
+  - path: /usr/local/share/ca-certificates/nimbus-ca.crt
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${base64encode(nimbus_ca_pem)}
+%{ endif ~}
+
+%{ if oidc_issuer_url != "" ~}
+  # ── Phase 7c — Grafana OIDC env (read by /usr/sbin/grafana-server) ───────
+  # Rendered into /etc/default/grafana-server, which the systemd unit sources.
+  # Role mapping uses JMESPath against the `groups` claim emitted by Keycloak's
+  # group-membership protocol mapper on the grafana client.
+  - path: /etc/default/grafana-server
+    owner: root:grafana
+    permissions: '0640'
+    content: |
+      GF_SERVER_ROOT_URL=${grafana_root_url}
+      GF_SERVER_DOMAIN=${trimprefix(trimprefix(grafana_root_url, "https://"), "http://")}
+
+      GF_AUTH_GENERIC_OAUTH_ENABLED=true
+      GF_AUTH_GENERIC_OAUTH_NAME=Keycloak
+      GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP=true
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID=${oidc_client_id}
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET=${oidc_client_secret}
+      GF_AUTH_GENERIC_OAUTH_SCOPES=openid profile email
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL=${oidc_issuer_url}/protocol/openid-connect/auth
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL=${oidc_issuer_url}/protocol/openid-connect/token
+      GF_AUTH_GENERIC_OAUTH_API_URL=${oidc_issuer_url}/protocol/openid-connect/userinfo
+      GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH=contains(groups[*], 'grafana-admins') && 'Admin' || contains(groups[*], 'grafana-editors') && 'Editor' || 'Viewer'
+      GF_AUTH_GENERIC_OAUTH_ALLOW_ASSIGN_GRAFANA_ADMIN=true
+%{ endif ~}
+
   # ── Prometheus scrape config ──────────────────────────────────────────────
   - path: /etc/prometheus/prometheus.yml
     owner: root:root
@@ -158,13 +209,14 @@ write_files:
   # ── Grafana datasource provisioning ──────────────────────────────────────
   # Written before Grafana starts so both data sources are wired on first boot.
   - path: /etc/grafana/provisioning/datasources/nimbus.yml
-    owner: root:grafana
-    permissions: '0640'
+    owner: root:root
+    permissions: '0644'
     content: |
       apiVersion: 1
 
       datasources:
         - name: Prometheus
+          uid: prometheus
           type: prometheus
           url: http://localhost:9090
           isDefault: true
@@ -172,8 +224,33 @@ write_files:
             timeInterval: 15s
 
         - name: Loki
+          uid: loki
           type: loki
           url: http://localhost:3100
+
+  # ── Grafana dashboard provisioning ───────────────────────────────────────
+  - path: /etc/grafana/provisioning/dashboards/nimbus.yml
+    owner: root:root
+    permissions: '0644'
+    content: |
+      apiVersion: 1
+
+      providers:
+        - name: Nimbus
+          orgId: 1
+          folder: Nimbus
+          type: file
+          disableDeletion: false
+          editable: true
+          updateIntervalSeconds: 30
+          options:
+            path: /var/lib/grafana/dashboards
+
+  - path: /var/lib/grafana/dashboards/nimbus-aws-infrastructure.json
+    owner: root:root
+    permissions: '0644'
+    content: |
+      ${indent(6, grafana_dashboard_json)}
 
   # ── Installer script ──────────────────────────────────────────────────────
   - path: /root/install-monitoring.sh
@@ -232,10 +309,14 @@ write_files:
         apt-get install -y grafana
       fi
 
-      # Ensure provisioning dir exists (grafana apt package may not create it)
+      # Ensure provisioning dirs exist (grafana apt package may not create them)
       mkdir -p /etc/grafana/provisioning/datasources
+      mkdir -p /etc/grafana/provisioning/dashboards
+      mkdir -p /var/lib/grafana/dashboards
       chown -R root:grafana /etc/grafana/provisioning
+      chown -R grafana:grafana /var/lib/grafana/dashboards
       chmod -R 750 /etc/grafana/provisioning
+      chmod -R 755 /var/lib/grafana/dashboards
 
       # ── Enable + start services ───────────────────────────────────────────
       systemctl daemon-reload
@@ -375,6 +456,10 @@ runcmd:
     NETPLAN
   - chmod 600 /etc/netplan/99-nimbus-mtu.yaml
   - netplan apply
+
+%{ if nimbus_ca_pem != "" ~}
+  - update-ca-certificates
+%{ endif ~}
 
   - [ bash, /root/install-monitoring.sh ]
   - [ bash, /root/install-observability.sh ]

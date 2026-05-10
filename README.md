@@ -43,7 +43,8 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 | ACM / TLS certs     | Let's Encrypt (public) + step-ca (internal)   | ✅       |
 | CloudFront / CDN    | Cloudflare Tunnel (zero-trust ingress)        | ✅       |
 | CloudWatch          | Prometheus + Grafana + Loki (`nimbus-mon`)    | ✅ Phase 6 |
-| IAM                 | Keycloak + HashiCorp Vault                    | planned  |
+| Cognito / IAM IdP   | Keycloak (`nimbus-iam`)                       | 🔲 Phase 7 |
+| Secrets Manager / STS | HashiCorp Vault (`nimbus-vault`)            | 🔲 Phase 7 |
 
 ---
 
@@ -88,9 +89,20 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 - Grafana at `mon.nimbus.local` (also proxied via nimbus-alb on `:443`)
 - Loki receives syslog + auth.log streams from all hosts
 
-### 🔲 Phase 7 — IAM
-- Keycloak (OIDC identity provider)
-- HashiCorp Vault (secrets + dynamic DB credentials)
+### 🔲 Phase 7 — IAM (see PHASE7.md for build guide)
+- **7a** *(Medium)* — `modules/keycloak/` + `modules/vault/`; `nimbus-iam` (10.0.100.30) and `nimbus-vault` (10.0.100.40) on mgmt subnet; ALB backends; CF Tunnel for `auth.nimbusnode.org`
+- **7b** *(Medium)* — Keycloak realm-as-code via `mrparkers/keycloak`; OIDC clients for nextcloud, grafana, minio-console, vault; nightly realm export to MinIO
+- **7c** *(Easy–Medium)* — App SSO: Nextcloud `user_oidc`, Grafana `generic_oauth`, MinIO console OIDC; local admins kept as break-glass
+- **7d** *(Hard)* — Vault bootstrap: raft storage, Shamir 3-of-5 unseal, audit log → Loki, KV v2 + database engines, OIDC auth via Keycloak
+- **7e** *(Medium)* — Secret migration: cloudflared / powerdns / nextcloud creds → Vault KV; Postgres app creds → Vault dynamic database engine
+- **7f** *(Trivial)* — Runbooks (vault-unseal, keycloak-recovery, oidc-rotation); README/service-map updates; tag `phase-7-complete`
+
+### 🔲 Phase 8 — IaC hardening (see PHASE8.md for punch list)
+- Bake pg-backup + mc.minio into cloud-init; fix fragile postgres host output
+- Migrate PowerDNS sqlite → gpgsql (drop `-parallelism=1`)
+- MinIO: resolve `mc` binary collision, lock down API allowlist, object lock on pg-backups
+- Reconcile cloud-init `ansible` vs template `nimbus` user; codify Tailscale ACL in repo
+- `scripts/smoke-test.sh` for post-rebuild verification
 
 ---
 
@@ -101,7 +113,8 @@ nimbus-infra/
 ├── README.md                        ← you are here
 ├── ARCHITECTURE.md                  ← AWS-to-Proxmox mapping in depth
 ├── NOTES.md                         ← lab journal, gotchas, decisions
-├── PHASE7.md                        ← upcoming IaC cleanup notes
+├── PHASE7.md                        ← Phase 7 (IAM — Keycloak + Vault) build guide
+├── PHASE8.md                        ← Phase 8 (IaC hardening) punch list
 ├── scripts/
 │   └── update-upgrade.sh            ← utility: apt update + upgrade all VMs
 ├── terraform/
@@ -162,17 +175,30 @@ terraform plan
 terraform apply
 ```
 
-Bootstrap order matters — DNS must exist before the PowerDNS provider can create records:
+Bootstrap order matters — providers can't auth against services that don't exist yet:
 
 ```bash
 # Stage 1: deploy nimbus-dns VM only
 terraform apply -target=module.nimbus_dns
 
-# Stage 2: capture the generated API key
+# Stage 2: capture the generated PowerDNS API key
 terraform output -raw nimbus_dns_api_key
 # → paste into terraform.tfvars as powerdns_api_key
 
-# Stage 3: full apply
+# Stage 3 (Phase 7+): bring up Keycloak before the keycloak provider authenticates.
+# nimbus-iam takes ~3 min to finish first-boot (Java + Keycloak build).
+terraform apply -target=module.nimbus_iam
+
+# Stage 4 (Phase 7d): bring up Vault — but it'll be sealed.
+terraform apply -target=module.nimbus_vault
+
+# Stage 5: manual `vault operator init` + unseal. Capture keys to your
+# operator machine, NOT this repo. See docs/runbooks/vault-init.md.
+
+# Stage 6: full apply — Keycloak realm + Vault engines/policies/auth methods land.
+export VAULT_ADDR=https://10.0.100.40:8200
+export VAULT_TOKEN=<root-token-from-stage-5>
+export VAULT_SKIP_VERIFY=true   # internal CA, or set VAULT_CACERT=./nimbus-ca.crt
 terraform apply
 ```
 
@@ -183,6 +209,7 @@ terraform apply
 - **Nextcloud version bump:** edit `NC_VERSION` in `terraform/modules/nextcloud/user-data.yml.tftpl`, then upgrade the running VM with `occ upgrade` (new VMs pick it up automatically on next rebuild).
 - **LE cert renewal:** acme.sh auto-renews via cron on nimbus-alb; deploy hook reloads HAProxy.
 - **step-ca cert renewal:** `step ca renew` on nimbus-alb before 2026-07-29, then `systemctl reload haproxy`.
+- **Grafana dashboard:** `terraform/modules/monitoring/dashboards/nimbus-aws-infrastructure.json` is loaded into the `Nimbus` folder by provisioning; see `docs/runbooks/grafana-dashboard.md`.
 - **Drift detection:** run `terraform plan` — any diff means manual changes have been made to VMs.
 - **Secrets rotation:** rotate `tf-token` quarterly; update `terraform.tfvars`.
 

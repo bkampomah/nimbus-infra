@@ -61,25 +61,34 @@ resource "proxmox_virtual_environment_file" "user_data" {
   source_raw {
     file_name = "${var.name}-user-data.yaml"
     data = templatefile("${path.module}/user-data.yml.tftpl", {
-      hostname           = var.name
-      admin_username     = var.admin_username
-      admin_password     = var.admin_password
-      admin_ssh_keys     = var.admin_ssh_keys
-      nextcloud_admin_pw = var.nextcloud_admin_pw
-      nextcloud_domain   = var.nextcloud_domain
-      trusted_domains    = distinct(concat([var.nextcloud_domain], var.extra_trusted_domains))
-      trusted_proxies    = var.trusted_proxies
-      alb_allow_cidrs    = var.alb_allow_cidrs
-      mgmt_allow_cidrs   = var.mgmt_allow_cidrs
-      db_host            = var.db_host
-      db_name            = var.db_name
-      db_user            = var.db_user
-      db_password        = var.db_password
-      s3_endpoint        = var.s3_endpoint
-      s3_bucket          = var.s3_bucket
-      s3_access_key      = var.s3_access_key
-      s3_secret_key      = var.s3_secret_key
-      loki_url           = var.loki_url
+      hostname                = var.name
+      admin_username          = var.admin_username
+      admin_password          = var.admin_password
+      admin_ssh_keys          = var.admin_ssh_keys
+      nextcloud_admin_pw      = var.nextcloud_admin_pw
+      nextcloud_domain        = var.nextcloud_domain
+      trusted_domains         = distinct(concat([var.nextcloud_domain], var.extra_trusted_domains))
+      trusted_proxies         = var.trusted_proxies
+      alb_allow_cidrs         = var.alb_allow_cidrs
+      mgmt_allow_cidrs        = var.mgmt_allow_cidrs
+      db_host                 = var.db_host
+      db_name                 = var.db_name
+      db_user                 = var.db_user
+      db_password             = var.db_password
+      s3_endpoint             = var.s3_endpoint
+      s3_bucket               = var.s3_bucket
+      s3_access_key           = var.s3_access_key
+      s3_secret_key           = var.s3_secret_key
+      loki_url                = var.loki_url
+      oidc_issuer_url         = var.oidc_issuer_url
+      oidc_client_id          = var.oidc_client_id
+      oidc_client_secret      = var.oidc_client_secret
+      nimbus_ca_pem           = var.nimbus_ca_pem
+      vault_addr              = var.vault_addr
+      vault_approle_role_id   = var.vault_approle_role_id
+      vault_approle_secret_id = var.vault_approle_secret_id
+      vault_db_role_path      = var.vault_db_role_path
+      vault_version           = var.vault_version
     })
   }
 }
