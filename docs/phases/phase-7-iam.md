@@ -19,6 +19,24 @@ AWS analogue: Cognito (User Pools) + Secrets Manager + STS dynamic credentials.
 
 ---
 
+## Current deployment status
+
+Phase 7 core is applied. Recovery work completed for `nimbus-dns`,
+`nimbus-alb`, `nimbus-s3`, `nimbus-iam`, and `nimbus-vault`; Vault was
+initialized and unsealed manually; the full apply landed Keycloak
+realm/clients/users, Vault engines/policies/auth, KV writes, and DNS records.
+
+Post-apply runtime pushes are complete: OIDC config was applied to
+`nimbus-mon`, `nimbus-cloud-01`, and `nimbus-s3`; the running `nimbus-alb`
+certificate bundle was refreshed and now covers `mon.nimbus.local`,
+`auth.nimbus.local`, and `auth.nimbusnode.org`.
+
+Remaining follow-ups are tracked in Phase 8: Grafana 13 dashboard/data-source
+provisioning repair, Keycloak admin recovery runbook, and OIDC client rotation
+runbook.
+
+---
+
 ## Sub-phases
 
 ### 7a — Modules + VM provisioning *(Medium)* — ✅ done
@@ -39,14 +57,15 @@ AWS analogue: Cognito (User Pools) + Secrets Manager + STS dynamic credentials.
 - **Bootstrap stage 4:** `terraform apply -target=module.nimbus_iam` must run before realm config can apply. Documented in README day-one commands.
 
 ### 7c — App SSO integration *(Easy–Medium)* — ✅ done
-- **Trust-store install** — every app VM that talks to Keycloak (nextcloud / monitoring / minio) gets `nimbus-ca.crt` written to `/usr/local/share/ca-certificates/` and `update-ca-certificates` runs in cloud-init. No `tls_skip_verify` flags anywhere.
+- **Runtime config pushed** — app OIDC config is modeled in Terraform and has been manually applied to existing Nextcloud, Grafana, and MinIO VMs because their VM resources ignore cloud-init user-data changes.
+- **Trust-store install** — app cloud-init writes `nimbus-ca.crt` to `/usr/local/share/ca-certificates/` and runs `update-ca-certificates`. No `tls_skip_verify` flags anywhere.
 - **Nextcloud:** `occ app:install user_oidc` + `occ user_oidc:provider Keycloak --discoveryuri ...` runs after `maintenance:install`. UID/email/displayname mapping wired.
-- **Grafana:** `/etc/default/grafana-server` rendered with `GF_AUTH_GENERIC_OAUTH_*` env vars. `GF_SERVER_ROOT_URL=https://mon.nimbus.local` so OIDC redirects come back via the ALB. Role mapping JMESPath: `grafana-admins → Admin`, `grafana-editors → Editor`, else `Viewer`. Backed by a `keycloak_openid_group_membership_protocol_mapper` on the grafana client that adds a `groups` claim.
-- **MinIO console:** `MINIO_IDENTITY_OPENID_*` appended to `/etc/default/minio`. Every OIDC user gets `consoleAdmin` via `MINIO_IDENTITY_OPENID_ROLE_POLICY` (homelab-grade; Phase 8 swaps to per-group claim-based policies).
+- **Grafana:** `/etc/default/grafana-server` renders with `GF_AUTH_GENERIC_OAUTH_*` env vars. `GF_SERVER_ROOT_URL=https://mon.nimbus.local` so OIDC redirects come back via the ALB. Role mapping JMESPath: `grafana-admins → Admin`, `grafana-editors → Editor`, else `Viewer`. Backed by a `keycloak_openid_group_membership_protocol_mapper` on the grafana client that adds a `groups` claim.
+- **MinIO console:** `MINIO_IDENTITY_OPENID_*` is appended to `/etc/default/minio`. Every OIDC user gets `consoleAdmin` via `MINIO_IDENTITY_OPENID_ROLE_POLICY` (homelab-grade; Phase 8 swaps to per-group claim-based policies).
 - **Groups in Keycloak:** `grafana-admins` + `grafana-editors`. Seed `nimbus-admin` user is placed in `grafana-admins` so the "log in via Keycloak, land in Grafana as Admin" smoke test works without manual UI clicks.
 - **Break-glass:** local admin user retained on every app — `nimbus` (Nextcloud admin), default Grafana admin, MinIO root.
 
-#### Smoke tests (run after `terraform apply`)
+#### Smoke tests (run after app OIDC config is pushed or VMs are rebuilt)
 1. **Nextcloud:** open `https://cloud.nimbusnode.org` → "Log in with Keycloak" link → enter `nimbus-test` + temporary password → forced rotation → land in Nextcloud.
 2. **Grafana:** open `https://mon.nimbus.local` → "Sign in with Keycloak" → as `nimbus-admin` → confirm Org Role = Admin in user profile.
 3. **MinIO console:** open `http://10.0.20.101:9001` → "Login with SSO" → confirm bucket list visible.
@@ -85,12 +104,11 @@ AWS analogue: Cognito (User Pools) + Secrets Manager + STS dynamic credentials.
 3. Agent re-renders `/var/lib/vault-agent/db.config.php` and runs `vault-agent-deploy-db` (sudo install + reload php-fpm).
 4. PHP-FPM workers reconnect with new creds. Old creds stay valid briefly until Vault revocation kicks in.
 
-### 7f — Runbooks + cutover *(Trivial)*
-- `docs/runbooks/vault-unseal.md` — recovery procedure
-- `docs/runbooks/keycloak-admin-recovery.md` — bootstrap admin if locked out
-- `docs/runbooks/oidc-client-rotation.md`
+### 7f — Runbooks + cutover *(Trivial)* — ✅ done
+- `docs/runbooks/vault-init.md` — one-time init/unseal procedure
+- `docs/runbooks/vault-secret-rotation.md` — rotating KV, static, and dynamic secrets
 - README phase-table update; AWS service map: Cognito → Keycloak (was IAM combined)
-- Tag `phase-7-complete`
+- Remaining hardening and runbook polish moved to Phase 8
 
 ---
 

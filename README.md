@@ -43,8 +43,8 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 | ACM / TLS certs     | Let's Encrypt (public) + step-ca (internal)   | ✅       |
 | CloudFront / CDN    | Cloudflare Tunnel (zero-trust ingress)        | ✅       |
 | CloudWatch          | Prometheus + Grafana + Loki (`nimbus-mon`)    | ✅ Phase 6 |
-| Cognito / IAM IdP   | Keycloak (`nimbus-iam`)                       | 🔲 Phase 7 |
-| Secrets Manager / STS | HashiCorp Vault (`nimbus-vault`)            | 🔲 Phase 7 |
+| Cognito / IAM IdP   | Keycloak (`nimbus-iam`)                       | ✅ Phase 7 |
+| Secrets Manager / STS | HashiCorp Vault (`nimbus-vault`)            | ✅ Phase 7 |
 
 ---
 
@@ -89,15 +89,17 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 - Grafana at `mon.nimbus.local` (also proxied via nimbus-alb on `:443`)
 - Loki receives syslog + auth.log streams from all hosts
 
-### 🔲 Phase 7 — IAM (see `docs/phases/phase-7-iam.md` for build guide)
+### ✅ Phase 7 — IAM (see `docs/phases/phase-7-iam.md` for build guide)
 - **7a** *(Medium)* — `modules/keycloak/` + `modules/vault/`; `nimbus-iam` (10.0.100.30) and `nimbus-vault` (10.0.100.40) on mgmt subnet; ALB backends; CF Tunnel for `auth.nimbusnode.org`
-- **7b** *(Medium)* — Keycloak realm-as-code via `mrparkers/keycloak`; OIDC clients for nextcloud, grafana, minio-console, vault; nightly realm export to MinIO
-- **7c** *(Easy–Medium)* — App SSO: Nextcloud `user_oidc`, Grafana `generic_oauth`, MinIO console OIDC; local admins kept as break-glass
+- **7b** *(Medium)* — Keycloak realm-as-code via `keycloak/keycloak`; OIDC clients for nextcloud, grafana, minio-console, vault; nightly realm export to MinIO
+- **7c** *(Easy–Medium)* — App SSO config rendered for Nextcloud `user_oidc`, Grafana `generic_oauth`, MinIO console OIDC; local admins kept as break-glass
 - **7d** *(Hard)* — Vault bootstrap: raft storage, Shamir 3-of-5 unseal, audit log → Loki, KV v2 + database engines, OIDC auth via Keycloak
 - **7e** *(Medium)* — Secret migration: cloudflared / powerdns / nextcloud creds → Vault KV; Postgres app creds → Vault dynamic database engine
-- **7f** *(Trivial)* — Runbooks (vault-unseal, keycloak-recovery, oidc-rotation); README/service-map updates; tag `phase-7-complete`
+- **7f** *(Trivial)* — README/service-map updates; Vault init + secret rotation runbooks; remaining runbook polish tracked in Phase 8
 
 ### 🔲 Phase 8 — IaC hardening (see `docs/phases/phase-8-iac-hardening.md` for punch list)
+- Repair Grafana 13 datasource/dashboard provisioning; OIDC works, but dashboard provisioning is temporarily disabled
+- Add Keycloak admin recovery and OIDC client rotation runbooks
 - Bake pg-backup + mc.minio into cloud-init; fix fragile postgres host output
 - Migrate PowerDNS sqlite → gpgsql (drop `-parallelism=1`)
 - MinIO: resolve `mc` binary collision, lock down API allowlist, object lock on pg-backups

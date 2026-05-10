@@ -3,6 +3,12 @@
 Cleanup pass after Phase 7 lands. Removes rebuild fragility, manual fixups,
 and architectural debt accumulated through Phases 3–7.
 
+## Phase 7 carry-forward
+- Add Keycloak admin recovery and OIDC client rotation runbooks.
+- Make Nimbus Grafana datasource/dashboard provisioning Grafana-13-safe and
+  point `PROVISIONING_CFG_DIR` back at `/etc/grafana/provisioning`; it points
+  at an empty runtime directory for now so Grafana OIDC can start cleanly.
+
 ## Module fragility (rebuild-vulnerable)
 - pg-backup systemd unit + timer not in cloud-init template. Manually
   installed twice now. Bake into `modules/postgres`.

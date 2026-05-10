@@ -65,6 +65,7 @@ resource "tls_cert_request" "nimbus_alb" {
     "nimbus-alb.nimbus.local",
     "cloud.nimbus.local",     # legacy AIO path (internal split-horizon)
     "cloud-app.nimbus.local", # new Nextcloud path
+    "mon.nimbus.local",       # Grafana via ALB (internal)
     "cloud.nimbusnode.org",   # AIO domain — internal redirect lands here
     "auth.nimbus.local",      # Phase 7 — Keycloak via ALB (internal)
     var.keycloak_domain,      # Phase 7 — Keycloak via ALB (CF Tunnel re-encrypt)

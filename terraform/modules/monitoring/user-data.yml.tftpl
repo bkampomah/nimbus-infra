@@ -86,6 +86,20 @@ write_files:
     owner: root:grafana
     permissions: '0640'
     content: |
+      GRAFANA_USER=grafana
+      GRAFANA_GROUP=grafana
+      GRAFANA_HOME=/usr/share/grafana
+      LOG_DIR=/var/log/grafana
+      DATA_DIR=/var/lib/grafana
+      MAX_OPEN_FILES=10000
+      CONF_DIR=/etc/grafana
+      CONF_FILE=/etc/grafana/grafana.ini
+      RESTART_ON_UPGRADE=true
+      PLUGINS_DIR=/var/lib/grafana/plugins
+      PROVISIONING_CFG_DIR=/etc/grafana/provisioning-runtime-disabled
+      PID_FILE_DIR=/run/grafana
+      GF_FEATURE_TOGGLES_DISABLE=provisioning,provisioningFolderMetadata
+
       GF_SERVER_ROOT_URL=${grafana_root_url}
       GF_SERVER_DOMAIN=${trimprefix(trimprefix(grafana_root_url, "https://"), "http://")}
 
@@ -229,6 +243,9 @@ write_files:
           url: http://localhost:3100
 
   # ── Grafana dashboard provisioning ───────────────────────────────────────
+  # Staged for Phase 8 repair. Grafana 13's provisioning module currently
+  # exits hard in this lab, so PROVISIONING_CFG_DIR points at an empty runtime
+  # directory until datasource/dashboard provisioning is made compatible.
   - path: /etc/grafana/provisioning/dashboards/nimbus.yml
     owner: root:root
     permissions: '0644'
@@ -312,7 +329,16 @@ write_files:
       # Ensure provisioning dirs exist (grafana apt package may not create them)
       mkdir -p /etc/grafana/provisioning/datasources
       mkdir -p /etc/grafana/provisioning/dashboards
+      mkdir -p /etc/grafana/provisioning-runtime-disabled
       mkdir -p /var/lib/grafana/dashboards
+      # Grafana 13's provisioning module currently exits hard in this lab with
+      # "Datasource provisioning error: data source not found". Keep the files
+      # staged, but point the service at an empty provisioning directory above.
+      rm -f \
+        /etc/grafana/provisioning/alerting/sample.yaml \
+        /etc/grafana/provisioning/access-control/sample.yaml \
+        /etc/grafana/provisioning/plugins/sample.yaml \
+        /etc/grafana/provisioning/dashboards/nimbus.yml
       chown -R root:grafana /etc/grafana/provisioning
       chown -R grafana:grafana /var/lib/grafana/dashboards
       chmod -R 750 /etc/grafana/provisioning

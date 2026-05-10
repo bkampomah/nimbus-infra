@@ -60,7 +60,7 @@ module "nimbus_alb" {
     },
   ]
 
-  alb_allow_cidrs         = [var.vpc_cidr, "172.18.0.0/12"]
+  alb_allow_cidrs         = distinct(concat([var.vpc_cidr, "172.18.0.0/12"], var.mgmt_allow_cidrs))
   mgmt_allow_cidrs        = var.mgmt_allow_cidrs
   cloudflare_tunnel_token = var.cloudflare_tunnel_token
   loki_url                = module.nimbus_mon.loki_url
@@ -79,4 +79,10 @@ output "nimbus_alb_host" {
 output "nimbus_alb_stats_url" {
   description = "HAProxy stats page - reachable from mgmt subnet"
   value       = module.nimbus_alb.stats_url
+}
+
+output "nimbus_alb_tls_pem" {
+  description = "Combined ALB PEM bundle for /etc/haproxy/nimbus-alb.pem"
+  value       = "${tls_locally_signed_cert.nimbus_alb.cert_pem}${tls_self_signed_cert.nimbus_ca.cert_pem}${tls_private_key.nimbus_alb.private_key_pem}"
+  sensitive   = true
 }
