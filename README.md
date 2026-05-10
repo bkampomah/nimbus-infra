@@ -89,7 +89,7 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 - Grafana at `mon.nimbus.local` (also proxied via nimbus-alb on `:443`)
 - Loki receives syslog + auth.log streams from all hosts
 
-### 🔲 Phase 7 — IAM (see PHASE7.md for build guide)
+### 🔲 Phase 7 — IAM (see `docs/phases/phase-7-iam.md` for build guide)
 - **7a** *(Medium)* — `modules/keycloak/` + `modules/vault/`; `nimbus-iam` (10.0.100.30) and `nimbus-vault` (10.0.100.40) on mgmt subnet; ALB backends; CF Tunnel for `auth.nimbusnode.org`
 - **7b** *(Medium)* — Keycloak realm-as-code via `mrparkers/keycloak`; OIDC clients for nextcloud, grafana, minio-console, vault; nightly realm export to MinIO
 - **7c** *(Easy–Medium)* — App SSO: Nextcloud `user_oidc`, Grafana `generic_oauth`, MinIO console OIDC; local admins kept as break-glass
@@ -97,7 +97,7 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 - **7e** *(Medium)* — Secret migration: cloudflared / powerdns / nextcloud creds → Vault KV; Postgres app creds → Vault dynamic database engine
 - **7f** *(Trivial)* — Runbooks (vault-unseal, keycloak-recovery, oidc-rotation); README/service-map updates; tag `phase-7-complete`
 
-### 🔲 Phase 8 — IaC hardening (see PHASE8.md for punch list)
+### 🔲 Phase 8 — IaC hardening (see `docs/phases/phase-8-iac-hardening.md` for punch list)
 - Bake pg-backup + mc.minio into cloud-init; fix fragile postgres host output
 - Migrate PowerDNS sqlite → gpgsql (drop `-parallelism=1`)
 - MinIO: resolve `mc` binary collision, lock down API allowlist, object lock on pg-backups
@@ -113,8 +113,8 @@ nimbus-infra/
 ├── README.md                        ← you are here
 ├── ARCHITECTURE.md                  ← AWS-to-Proxmox mapping in depth
 ├── NOTES.md                         ← lab journal, gotchas, decisions
-├── PHASE7.md                        ← Phase 7 (IAM — Keycloak + Vault) build guide
-├── PHASE8.md                        ← Phase 8 (IaC hardening) punch list
+├── .github/
+│   └── workflows/terraform.yml      ← CI: fmt, validate, best-effort plan, drift check
 ├── scripts/
 │   └── update-upgrade.sh            ← utility: apt update + upgrade all VMs
 ├── terraform/
@@ -131,23 +131,47 @@ nimbus-infra/
 │   ├── network.tf                   ← Proxmox firewall rules
 │   ├── rds.tf                       ← nimbus-rds (PostgreSQL module)
 │   ├── s3.tf                        ← nimbus-s3 (MinIO module)
+│   ├── keycloak.tf                  ← nimbus-iam service wiring
+│   ├── vault.tf                     ← nimbus-vault service wiring
 │   └── modules/
 │       ├── bastion/                 ← DMZ jumpbox module
 │       ├── haproxy/                 ← ALB module (HAProxy + cloudflared)
+│       ├── keycloak/                ← IAM module
 │       ├── minio/                   ← S3 module
 │       ├── monitoring/              ← nimbus-mon module (Prometheus + Grafana + Loki)
 │       ├── nextcloud/               ← Nextcloud app-tier module
 │       ├── postgres/                ← RDS module (PostgreSQL + pgbackrest)
-│       └── powerdns/                ← DNS module
+│       ├── powerdns/                ← DNS module
+│       └── vault/                   ← Secrets module
 └── docs/
     ├── images/
     │   └── nimbus_aws_proxmox_network_diagram.svg ← rendered architecture diagram
-    ├── ssh-config.txt               ← SSH config for all Nimbus hosts
-    ├── haproxy-nextcloud.cfg.example← Reference HAProxy config (pre-Terraform)
-    ├── nextcloud-cloudflare-tunnel.md ← Cloudflare Tunnel topology notes
+    ├── phases/
+    │   ├── phase-1-foundation.md
+    │   ├── phase-2-aio-integration.md
+    │   ├── phase-3-dns.md
+    │   ├── phase-3-dns-copy-paste.md
+    │   ├── phase-4-alb.md
+    │   ├── phase-7-iam.md           ← Phase 7 build guide
+    │   └── phase-8-iac-hardening.md ← Phase 8 hardening punch list
+    ├── reference/
+    │   ├── ssh-config.txt           ← SSH config for all Nimbus hosts
+    │   ├── haproxy-nextcloud.cfg.example
+    │   └── nextcloud-cloudflare-tunnel.md
     └── runbooks/
-        └── internal-ca.md           ← Step-ca setup and cert renewal
+        ├── internal-ca.md
+        ├── grafana-dashboard.md
+        ├── vault-init.md
+        └── vault-secret-rotation.md
 ```
+
+Local-only and generated paths are intentionally outside the map above:
+
+- `terraform/.terraform/` — provider/module cache from `terraform init`.
+- `terraform/backups/` — generated backup payloads that may contain lab data.
+- `terraform/terraform.tfvars` and `terraform/terraform.tfstate*` — local inputs and state.
+- `scripts/install-obs.sh` and `scripts/install-monitoring.sh` — ignored one-off bootstrap scripts; current functionality lives in module cloud-init templates.
+- `.claude/`, `.codex/`, and `.agents/` — local AI/editor metadata for this workstation.
 
 ---
 

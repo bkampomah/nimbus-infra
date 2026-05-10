@@ -1,4 +1,4 @@
-# docs/phase3-nimbus-dns-runbook.md
+# docs/phases/phase-3-dns-copy-paste.md
 
 ## Phase 3 runbook — nimbus-dns
 

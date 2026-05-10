@@ -1,4 +1,4 @@
-# docs/nextcloud-cloudflare-tunnel.md
+# docs/reference/nextcloud-cloudflare-tunnel.md
 
 ## How traffic flows
 
