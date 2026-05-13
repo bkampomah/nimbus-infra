@@ -52,7 +52,7 @@ write_files:
       MINIO_ROOT_USER=${minio_root_user}
       MINIO_ROOT_PASSWORD=${minio_root_password}
       MINIO_VOLUMES=/mnt/minio/data
-      MINIO_OPTS=--console-address :9001
+      MINIO_OPTS="--console-address :9001"
 %{ if oidc_issuer_url != "" ~}
 
       # ── Phase 7c — OIDC SSO via Keycloak ─────────────────────────────────
@@ -136,7 +136,7 @@ write_files:
       # without lock need a one-time migration if retention set warns below.
       HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" mb --ignore-existing --with-lock local/pg-backups
       HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" version enable local/pg-backups
-      if HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" retention set --recursive --default "${pgbackup_retention_mode}" "${pgbackup_retention_duration}" local/pg-backups; then
+      if HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" retention set --default "${pgbackup_retention_mode}" "${pgbackup_retention_duration}" local/pg-backups; then
         echo "pg-backups default retention: ${pgbackup_retention_mode} ${pgbackup_retention_duration}"
       else
         echo "WARN: pg-backups retention not set; bucket may predate object lock and require migration" >&2
