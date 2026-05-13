@@ -96,7 +96,7 @@ From a workstation that can reach mgmt subnet (e.g. WSL with the static route):
 ```
 http://10.0.1.10:8404/
 ```
-Shows live request rate, backend health, queue depth. No auth — protected by UFW source CIDR only. Add auth in Phase 4c when TLS lands.
+Shows live request rate, backend health, queue depth. No auth — protected by UFW source CIDR only.
 
 ### Add a new backend
 1. Add an entry to `terraform/alb.tf` in the `backends` list:
@@ -207,9 +207,9 @@ If cloud-init fails, SSH in via console (`qm terminal 108`) and read `/var/log/c
 
 ## Tech debt and notes
 
-- **No TLS yet.** All traffic is HTTP. Phase 4c will add Let's Encrypt + cert rotation. Until then, Nextcloud's 302 to `https://cloud.nimbusnode.org` means users still get TLS — just not from the ALB.
-- **Stats page has no auth.** Subnet-restricted via UFW only. When TLS comes in 4c, add basic auth.
-- **One backend in the pool today.** Module supports any number; just add to the `backends` list. Phase 6 (multi-tier web) is when this matters.
+- **Historical Phase 4 state:** the first ALB cut used HTTP only. Later phases added Cloudflare Tunnel ingress, Let's Encrypt public certs, and internal CA TLS on `:443`.
+- **Stats page has no app-level auth.** It remains subnet-restricted via UFW.
+- **Multiple backends now exist.** The module supports host-header routing for AIO, managed Nextcloud, Grafana, and Keycloak.
 - **No autoscaling.** This is a single VM; it doesn't grow with traffic. For real autoscaling you'd need Kubernetes or multi-node Proxmox + keepalived. Out of scope for the homelab.
 - **Health check `expect status 200,301,302,401`** because Nextcloud may return any of these on `GET /` depending on session state. If you add a backend that returns something else, widen this list in `modules/haproxy/user-data.yml.tftpl`.
 - **Snippet → VM sync is manual.** `terraform apply` updates the snippet on Proxmox storage, but the running VM doesn't re-read it. Either edit live and reload HAProxy, or use `-replace` to rebuild the VM.

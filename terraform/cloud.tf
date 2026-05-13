@@ -57,7 +57,7 @@ module "nimbus_nextcloud" {
   # Phase 7e — Vault Agent renders dynamic Postgres creds into Nextcloud's
   # config tree, reloading php-fpm on each rotation. role_id is non-secret;
   # secret_id is materialized into Terraform state once and read by cloud-init.
-  # Phase 8 hardening: response-wrap the secret_id at handoff.
+  # Future hardening: response-wrap the secret_id at handoff.
   vault_addr              = module.nimbus_vault.api_addr
   vault_approle_role_id   = vault_approle_auth_backend_role.nextcloud.role_id
   vault_approle_secret_id = vault_approle_auth_backend_role_secret_id.nextcloud.secret_id

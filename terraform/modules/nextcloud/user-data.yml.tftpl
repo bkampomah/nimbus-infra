@@ -225,9 +225,9 @@ write_files:
   # ── Phase 7e — Vault Agent: dynamic Postgres credentials ─────────────────
   # AppRole role_id + secret_id staged on disk for the agent to read at start.
   # Owner is root:root at write time; vault-agent user is created in runcmd
-  # and the install script chowns these files. Phase 8 hardening: response-
-  # wrap the secret_id so cloud-init only carries a one-shot wrapping token
-  # instead of the raw secret_id.
+  # and the install script chowns these files. Future hardening: response-wrap
+  # the secret_id so cloud-init only carries a one-shot wrapping token instead
+  # of the raw secret_id.
   - path: /etc/vault-agent/role-id
     owner: root:root
     permissions: '0600'

@@ -10,7 +10,7 @@ This directory is organized by how the document is used:
 Current high-value entry points:
 
 - `phases/phase-7-iam.md` — Keycloak and Vault build guide.
-- `phases/phase-8-iac-hardening.md` — IaC hardening punch list.
+- `phases/phase-8-iac-hardening.md` — IaC hardening completion record.
 - `runbooks/vault-init.md` — manual Vault initialization and unseal procedure.
 - `runbooks/keycloak-admin-recovery.md` — recover `nimbus-admin` realm admin access.
 - `runbooks/oidc-client-rotation.md` — rotate Keycloak OIDC client secrets and push them to apps.

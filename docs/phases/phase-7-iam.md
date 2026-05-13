@@ -52,7 +52,7 @@ added the Keycloak admin recovery plus OIDC client rotation runbooks.
 - `nimbus` realm — brute-force protection (30 failures / 12h, 60s→15min lockout), password policy `length(12) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1) and notUsername`.
 - OIDC clients: `nextcloud`, `grafana`, `minio-console`, `vault` (all CONFIDENTIAL, standard flow only).
 - Seed users: `nimbus-admin` (realm-management/realm-admin role) + `nimbus-test`, both with temporary passwords.
-- Nightly `kc.sh export` at 03:00 → MinIO `kc-backups` bucket. Service stops Keycloak briefly for the offline export (~10s window). Phase 8 hardening: switch to admin REST API export to remove the downtime.
+- Nightly `kc.sh export` at 03:00 → MinIO `kc-backups` bucket. Service stops Keycloak briefly for the offline export (~10s window). Phase 8 hardened the job's MinIO client/config handling and DB environment inheritance; it still uses the offline export path.
 - **Bootstrap stage 4:** `terraform apply -target=module.nimbus_iam` must run before realm config can apply. Documented in README day-one commands.
 
 ### 7c — App SSO integration *(Easy–Medium)* — ✅ done
@@ -76,10 +76,10 @@ added the Keycloak admin recovery plus OIDC client rotation runbooks.
 - **Audit device:** file at `/var/log/vault/audit.log` (already on Promtail's vault-audit scrape from 7a, so it streams to Loki).
 - **Secrets engines:** `kv-v2` at `secret/`, `database` at `database/` with a `nextcloud` dynamic role (1h default TTL, 24h max). Phase 7e wires Nextcloud to consume it.
 - **Auth methods:** `oidc` (Keycloak IdP, role `vault-admins`), `approle` (role `terraform` for KV reads). Token method is built-in.
-- **Postgres `vault` role = SUPERUSER** on nimbus-rds. Created by the postgres module's cloud-init when `vault_admin_user` is set. Phase 8 tightens to membership-of-target-DB-owner.
+- **Postgres `vault` role = SUPERUSER** on nimbus-rds. Created by the postgres module's cloud-init when `vault_admin_user` is set. This remains lab-grade; tightening it to membership-of-target-DB-owner is future hardening.
 - **Policies:** `admin` (full), `operator` (KV CRUD), `terraform-read` (`secret/data/nimbus/*` read), `nextcloud-db` (`database/creds/nextcloud` read).
 - **Keycloak `vault-admins` group** → Vault `admin` policy via OIDC role bound_claims. Seed `nimbus-admin` placed in it.
-- **Bootstrap is now 6 stages** in the README. Stage 4 = target nimbus-vault VM. Stage 5 = manual `vault operator init`. Stage 6 = full apply with `VAULT_TOKEN` exported.
+- **Bootstrap is now 7 stages** in the README. Stage 5 = target nimbus-vault VM. Stage 6 = manual `vault operator init`. Stage 7 = full apply with `VAULT_TOKEN` exported.
 
 ### 7e — Secret migration *(Medium)* — ✅ done
 
@@ -91,9 +91,9 @@ added the Keycloak admin recovery plus OIDC client rotation runbooks.
 | nextcloud Postgres creds    | random_password   | Vault `database/` (dynamic)   | **Vault Agent on nimbus-cloud-01** |
 | admin_password (VM admin)   | tfvars            | stays                         | break-glass |
 
-- **Static secrets:** all three written to Vault KV via `vault_kv_secret_v2`. The nextcloud admin password is consumed via the data source — that's the cleanest migration target since it's only used at install time. Cloudflared and powerdns_api_key keep their existing var-based consumers (the powerdns provider must work during Stage 1 before Vault exists; the cloudflared token only matters when the ALB is rebuilt). Phase 8 hardens these to Vault-only reads.
+- **Static secrets:** all three written to Vault KV via `vault_kv_secret_v2`. The nextcloud admin password is consumed via the data source — that's the cleanest migration target since it's only used at install time. Cloudflared and powerdns_api_key keep their existing var-based consumers because bootstrap still needs them before Vault or rebuilt consumers are available.
 - **Postgres dynamic creds (the marquee):** Vault Agent runs on nimbus-cloud-01 as a systemd unit, authenticates via AppRole, renders a Nextcloud overlay config (`config/db.config.php`) with creds minted from `database/creds/nextcloud`, and reloads php-fpm on every rotation. Old leases stay valid until Vault revokes them, so in-flight requests don't see auth errors during cred rotation.
-- **AppRole secret_id is materialized** into Terraform state and staged to disk via cloud-init. Lab grade — Phase 8 response-wraps the secret_id at handoff.
+- **AppRole secret_id is materialized** into Terraform state and staged to disk via cloud-init. Lab grade; response-wrapping the handoff remains future hardening.
 - **Static `nextcloud` Postgres role stays** as break-glass; Nextcloud's runtime uses Vault-minted dynamic users after Vault Agent's first render.
 - **Sudoers narrowly scoped** for vault-agent: `install -o www-data ... db.config.php` and `systemctl reload php8.3-fpm.service`. Nothing else.
 

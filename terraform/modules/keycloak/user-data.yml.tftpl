@@ -200,8 +200,8 @@ write_files:
 
   # ── Realm export backup (Phase 7b) ────────────────────────────────────────
   # Nightly: stop keycloak → kc.sh export → tar → push to MinIO → start.
-  # Brief downtime (~10s) at 03:00. Phase 8 hardening: switch to admin REST
-  # API export to remove the downtime window.
+  # Brief downtime (~10s) at 03:00. Future hardening can switch this to an
+  # online/admin-API export path if that downtime becomes a problem.
 %{ if backup_s3_endpoint != "" ~}
   - path: /usr/local/bin/kc-backup.sh
     owner: root:root

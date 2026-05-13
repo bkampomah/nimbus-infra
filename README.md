@@ -16,8 +16,13 @@ A learning project that recreates an AWS-style multi-tier network (VPC, subnets,
 **Public access:**
 - `https://cloud.nimbusnode.org` → Cloudflare Tunnel → nimbus-alb → nimbus-cloud-01:80
 - `https://aio.nimbusnode.org` → Cloudflare Tunnel → nimbus-alb → nimbus-aio:11000
+- `https://auth.nimbusnode.org` → Cloudflare Tunnel → nimbus-alb → nimbus-iam:8443
 
-**Internal access:** `https://cloud.nimbus.local` or `https://mon.nimbus.local` → nimbus-alb:443 (self-CA TLS) → backend
+**Internal access:**
+- `https://cloud-app.nimbus.local` → nimbus-alb:443 (self-CA TLS) → nimbus-cloud-01
+- `https://cloud.nimbus.local` → nimbus-alb:443 (self-CA TLS) → nimbus-aio rollback backend
+- `https://mon.nimbus.local` and `https://auth.nimbus.local` → nimbus-alb:443 (self-CA TLS)
+- `https://vault.nimbus.local:8200` → direct to nimbus-vault via Tailscale/mgmt access
 
 See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 
@@ -59,14 +64,16 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 ### ✅ Phase 1 — Network foundation
 - Proxmox SDN Zone `nimbus-vpc` + 4 VNets configured manually
 - pfSense as IGW + NAT + firewall
-- Port-forward 80/443 on pfSense WAN → nimbus-alb
+- pfSense WAN kept default-deny; public app ingress is added later through Cloudflare Tunnel
 
-### ✅ Phase 2 — Golden image
-- Ubuntu 24.04 cloud-init template (VMID 9000)
-- All VMs clone from this template via `bpg/proxmox` Terraform provider
+### ✅ Phase 2 — AIO integration (legacy/reference app)
+- Pre-existing Nextcloud AIO VM dual-homed into `nimbus-app` at `10.0.10.101`
+- AIO return route and Apache binding configured so Nimbus services can reach it
+- Kept as rollback/reference after Phase 5 built the managed Nextcloud stack
 
 ### ✅ Phase 3 — DNS (Route 53 equivalent)
-- nimbus-dns deployed with PowerDNS authoritative (`nimbus.local`, `nimbusnode.org`) on a PostgreSQL `gpgsql` backend in nimbus-rds
+- nimbus-dns deployed with PowerDNS authoritative (`nimbus.local`, `nimbusnode.org`) plus recursor
+- Backend is currently PostgreSQL `gpgsql` on nimbus-rds after Phase 8 hardening
 - All VM A records managed by Terraform via `pan-net/powerdns` provider
 - Split-horizon: `cloud.nimbusnode.org` and `aio.nimbusnode.org` resolve to ALB internally, Cloudflare externally
 
@@ -76,9 +83,9 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 - **4c** *(Easy)* — HAProxy frontend + AIO backend configured; `cloud.nimbus.local` DNS flipped from AIO → ALB
 - **4d** *(Trivial)* — Split-horizon verified; traffic flow documented; `phase-4-complete` tagged
 
-### ✅ Phase 5 — Data + App Tier (see ARCHITECTURE.md §15 for complexity guide)
-- **5a** *(Medium)* — PostgreSQL module: pg_hba, listen_addresses, pgbackrest → MinIO WAL archive
-- **5b** *(Easy)* — MinIO module: single-node on dedicated data disk; `mcli` alias + bucket + IAM user
+### ✅ Phase 5 — Data + App Tier (see ARCHITECTURE.md §16 for complexity guide)
+- **5a** *(Medium)* — PostgreSQL module: pg_hba, listen_addresses, nightly `pg-backup` dump pipeline to MinIO
+- **5b** *(Easy)* — MinIO module: single-node on dedicated data disk; `mc.minio` client, buckets, and scoped service accounts
 - **5c** *(Hard)* — Nextcloud app: `occ maintenance:install` automated in cloud-init; MinIO as S3 Primary Object Storage; nginx + PHP-FPM 8.3; TLS (LE wildcard + step-ca internal CA) on nimbus-alb
 - **5d** *(Easy)* — ALB + DNS wiring: HAProxy backend for nimbus-cloud-01; PowerDNS A record; Cloudflare Tunnel (cloudflared on nimbus-alb, `protocol: http2`)
 - **5e** *(Trivial)* — Cutover: Cloudflare CNAME flipped from AIO tunnel to ALB tunnel; AIO kept on `cloud.nimbus.local` for rollback
@@ -95,18 +102,19 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 - **7c** *(Easy–Medium)* — App SSO config rendered for Nextcloud `user_oidc`, Grafana `generic_oauth`, MinIO console OIDC; local admins kept as break-glass
 - **7d** *(Hard)* — Vault bootstrap: raft storage, Shamir 3-of-5 unseal, audit log → Loki, KV v2 + database engines, OIDC auth via Keycloak
 - **7e** *(Medium)* — Secret migration: cloudflared / powerdns / nextcloud creds → Vault KV; Postgres app creds → Vault dynamic database engine
-- **7f** *(Trivial)* — README/service-map updates; Vault init + secret rotation runbooks; remaining runbook polish tracked in Phase 8
+- **7f** *(Trivial)* — README/service-map updates; Vault init + secret rotation runbooks; remaining hardening completed in Phase 8
 
-### 🔲 Phase 8 — IaC hardening (see `docs/phases/phase-8-iac-hardening.md` for punch list)
+### ✅ Phase 8 — IaC hardening (see `docs/phases/phase-8-iac-hardening.md` for completion record)
 - Grafana 13 datasource/dashboard provisioning repaired; `nimbus-mon` now loads the `Nimbus` dashboard folder from repo JSON
 - Promtail log permissions and Nextcloud Vault Agent runtime fixes are in IaC; live VMs were manually synced
 - Nextcloud Vault dynamic DB role fixed and verified with a fresh credential rotation
 - Keycloak admin recovery and OIDC client rotation runbooks added
 - Backup pipelines hardened in IaC: `pg-backup`, Keycloak realm export, explicit `mc.minio` config, static-IP RDS output
 - PowerDNS migrated from SQLite to `gpgsql` on nimbus-rds; DNS record replay verified
-- MinIO: VPC-only API allowlist kept in IaC, console SSO moved to Keycloak group claims, fresh `pg-backups` buckets get `COMPLIANCE 30d` object lock
+- MinIO: VPC-only API allowlist kept in IaC, console SSO moved to Keycloak group claims, `pg-backups` object lock and default `COMPLIANCE 30d` retention verified
 - Linux admin identity standardized on `nimbus`; `scripts/smoke-test.sh` covers post-rebuild verification
 - Tailscale ACL codified in `.github/tailscale-acl.hujson`; GitHub Actions tests on PRs and applies on `main`
+- Live Phase 8 verification passed on 2026-05-13: `scripts/smoke-test.sh` reported 52 pass, 0 warn, 0 skip, 0 fail
 
 ---
 
@@ -145,7 +153,7 @@ nimbus-infra/
 │       ├── minio/                   ← S3 module
 │       ├── monitoring/              ← nimbus-mon module (Prometheus + Grafana + Loki)
 │       ├── nextcloud/               ← Nextcloud app-tier module
-│       ├── postgres/                ← RDS module (PostgreSQL + pgbackrest)
+│       ├── postgres/                ← RDS module (PostgreSQL + pg-backup)
 │       ├── powerdns/                ← DNS module
 │       └── vault/                   ← Secrets module
 └── docs/
@@ -158,7 +166,7 @@ nimbus-infra/
     │   ├── phase-3-dns-copy-paste.md
     │   ├── phase-4-alb.md
     │   ├── phase-7-iam.md           ← Phase 7 build guide
-    │   └── phase-8-iac-hardening.md ← Phase 8 hardening punch list
+    │   └── phase-8-iac-hardening.md ← Phase 8 hardening completion record
     ├── reference/
     │   ├── ssh-config.txt           ← SSH config for all Nimbus hosts
     │   ├── haproxy-nextcloud.cfg.example
@@ -203,33 +211,36 @@ cd nimbus-infra/terraform
 cp terraform.tfvars.example terraform.tfvars
 # edit terraform.tfvars — every CHANGE_ME is called out
 terraform init
-terraform plan
-terraform apply
+# then follow the staged bootstrap below
 ```
 
 Bootstrap order matters — providers can't auth against services that don't exist yet:
 
 ```bash
-# Stage 1: deploy nimbus-dns VM only
+# Stage 1: deploy data/monitoring prerequisites.
+# This also brings up nimbus-s3 and nimbus-mon because nimbus-rds depends on them.
+terraform apply -target=module.nimbus_rds
+
+# Stage 2: deploy nimbus-dns after nimbus-rds has the PowerDNS gpgsql database.
 terraform apply -target=module.nimbus_dns
 
-# Stage 2: capture the generated PowerDNS API key
+# Stage 3: capture the generated PowerDNS API key
 terraform output -raw nimbus_dns_api_key
 # → paste into terraform.tfvars as powerdns_api_key
 
-# Stage 3 (Phase 7+): bring up Keycloak before the keycloak provider authenticates.
+# Stage 4 (Phase 7+): bring up Keycloak before the keycloak provider authenticates.
 # nimbus-iam takes ~3 min to finish first-boot (Java + Keycloak build).
 terraform apply -target=module.nimbus_iam
 
-# Stage 4 (Phase 7d): bring up Vault — but it'll be sealed.
+# Stage 5 (Phase 7d): bring up Vault — but it'll be sealed.
 terraform apply -target=module.nimbus_vault
 
-# Stage 5: manual `vault operator init` + unseal. Capture keys to your
+# Stage 6: manual `vault operator init` + unseal. Capture keys to your
 # operator machine, NOT this repo. See docs/runbooks/vault-init.md.
 
-# Stage 6: full apply — Keycloak realm + Vault engines/policies/auth methods land.
+# Stage 7: full apply — Keycloak realm + Vault engines/policies/auth methods land.
 export VAULT_ADDR=https://10.0.100.40:8200
-export VAULT_TOKEN=<root-token-from-stage-5>
+export VAULT_TOKEN=<root-token-from-stage-6>
 export VAULT_SKIP_VERIFY=true   # internal CA, or set VAULT_CACERT=./nimbus-ca.crt
 terraform apply
 ```
@@ -245,6 +256,9 @@ terraform apply
 - **Keycloak admin recovery:** reset `nimbus-admin` through the master break-glass admin; see `docs/runbooks/keycloak-admin-recovery.md`.
 - **OIDC client rotation:** rotate one client at a time and push the new secret to the app; see `docs/runbooks/oidc-client-rotation.md`.
 - **MinIO client naming:** use `/usr/local/bin/mc.minio --config-dir /root/.mc.minio`; do not rely on `/usr/bin/mc`, which can be Midnight Commander.
+- **MinIO backup retention:** `pg-backups` is object-lock-enabled with default `COMPLIANCE 30d` retention; object lock must be present at bucket creation time.
+- **Tailscale ACL GitOps:** update `.github/tailscale-acl.hujson`; PRs test the policy, merges to `main` apply it. See `docs/runbooks/tailscale-acl.md`.
+- **Smoke test:** after rebuilds or live hardening, run `./scripts/smoke-test.sh` from the repo root.
 - **Drift detection:** run `terraform plan` — any diff means manual changes have been made to VMs.
 - **Secrets rotation:** rotate `tf-token` quarterly; update `terraform.tfvars`.
 
@@ -255,8 +269,7 @@ terraform apply
 | Thing                      | Why not                                                        |
 |----------------------------|----------------------------------------------------------------|
 | Proxmox SDN zones/vnets    | Provider coverage is partial; set up once by hand              |
-| pfSense config             | Use the pfSense UI + config.xml backup; port-forward 80/443    |
+| pfSense config             | Use the pfSense UI + config.xml backup; WAN stays default-deny |
 | acme.sh / LE cert issuance | Run once manually on nimbus-alb; auto-renews via cron          |
 | cloudflared tunnel token   | Created in Cloudflare dashboard; stored in `terraform.tfvars`  |
-| Grafana dashboards         | JSON files in repo, loaded via provisioning (Phase 6)          |
-| OS-level config post-boot  | Use `occ`, `psql`, etc. directly; Terraform just lands the VM  |
+| Tailscale subnet router LXC | Runs outside this Terraform repo; ACL policy is GitOps-managed |

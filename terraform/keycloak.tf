@@ -3,16 +3,17 @@
 # Phase 7b — realm-as-code via the keycloak/keycloak provider.
 #
 # Provider auth: master-realm admin user/password (the bootstrap admin
-# created by KEYCLOAK_ADMIN env in modules/keycloak). Phase 8 hardening:
-# replace with a dedicated service account using client_credentials grant.
+# created by KEYCLOAK_ADMIN env in modules/keycloak). Future hardening:
+# replace this with a dedicated service account using client_credentials.
 #
 # Bootstrap chicken-and-egg:
 #   On a fresh tree, nimbus-iam must be running before this provider can
 #   authenticate. Order:
-#     1. terraform apply -target=module.nimbus_dns
-#     2. (capture powerdns_api_key into terraform.tfvars)
-#     3. terraform apply -target=module.nimbus_iam
-#     4. terraform apply
+#     1. terraform apply -target=module.nimbus_rds
+#     2. terraform apply -target=module.nimbus_dns
+#     3. capture powerdns_api_key into terraform.tfvars
+#     4. terraform apply -target=module.nimbus_iam
+#     5. terraform apply after Vault is initialized/unsealed
 #
 # We hit Keycloak directly on the IP (not the CF-tunneled hostname) so realm
 # config can land before Cloudflare Tunnel ingress is configured. The cert

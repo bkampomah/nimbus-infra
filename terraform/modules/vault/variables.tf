@@ -72,7 +72,7 @@ variable "tls_key_pem" {
 # ── Network access ──────────────────────────────────────────────────────────
 
 variable "client_allow_cidrs" {
-  description = "CIDRs allowed to reach Vault on :8200. Default = full VPC; tighten in Phase 8."
+  description = "CIDRs allowed to reach Vault on :8200. Default = full VPC; tighten later if needed."
   type        = list(string)
   default     = ["10.0.0.0/16"]
 }

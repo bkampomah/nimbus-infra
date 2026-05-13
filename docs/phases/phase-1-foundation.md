@@ -107,11 +107,16 @@ If any of these fail, see Troubleshooting below.
 ## Common failures
 
 ### "I can't reach 10.0.x.x from my laptop"
-Most likely cause: missing static route on Windows. Run from admin PowerShell:
+For direct LAN access, the most likely cause is a missing static route on
+Windows. Run from admin PowerShell:
 ```powershell
 route -p add 10.0.0.0 mask 255.255.0.0 192.168.1.211
 ```
 Verify: `route print -4 | findstr 10.0`
+
+Current remote-admin access normally uses the Phase 8 Tailscale subnet router
+instead of a persistent Windows route. Do not keep both routes active unless you
+intend to prefer the LAN path.
 
 ### "Ping works but TCP times out / "Connection refused""
 pfSense firewall rule has wrong protocol. Check Firewall → Rules → \<interface\>:

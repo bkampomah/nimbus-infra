@@ -15,7 +15,8 @@
 #       * powerdns provider must be configured during Stage 1 before Vault exists
 #       * cloudflared token is consumed in nimbus-alb cloud-init; rebuilding the
 #         ALB on-rotation is fine, but the var path is what tfvars users expect.
-#     Phase 8 hardening: switch consumers to the data sources, drop the vars.
+#     Future hardening: switch consumers to the data sources and drop the vars
+#     after bootstrap no longer needs provider/env secrets from tfvars.
 
 # ── Writes ──────────────────────────────────────────────────────────────────
 

@@ -42,6 +42,10 @@ and architectural debt accumulated through Phases 3–7.
   `COMPLIANCE 30d` retention rule. Existing buckets that predate object lock
   need a one-time migration or rebuild; cloud-init logs a warning instead of
   failing the entire MinIO bootstrap.
+- Live `nimbus-s3` was migrated on 2026-05-13: the existing five PostgreSQL
+  backup objects were copied to a temporary bucket, `pg-backups` was recreated
+  with object lock, default `COMPLIANCE 30d` retention was set, the backups
+  were restored, and the temporary bucket was removed.
 - MinIO API access remains VPC-only in Terraform (`api_allow_cidrs =
   [var.vpc_cidr]`). Home-LAN administration should go through Tailscale or the
   bastion rather than codifying the manual LAN UFW patch.
@@ -67,12 +71,10 @@ and architectural debt accumulated through Phases 3–7.
 - No open PowerDNS backend migration items.
 
 ## MinIO service quality
-- Live `nimbus-s3` may still need rebuild/migration before `pg-backups` object
-  lock applies, because older MinIO/S3 behavior requires object lock at bucket
-  creation.
+- No open MinIO service-quality items.
 
 ## Identity / access
 - No open tailnet policy items.
 
 ## Operational hygiene
-- Clean up duplicate NRPT rule on Windows admin box.
+- No open operational hygiene items.

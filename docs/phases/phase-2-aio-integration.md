@@ -185,5 +185,9 @@ If the AIO is healthy and you only need to re-attach it to Nimbus:
 
 - **The netplan file is NOT in code.** This is the single biggest piece of tech debt in the project. If the AIO VM is rebuilt, this config has to be re-applied manually. Document it, back it up, but don't pretend it's reproducible.
 - **The AIO was deliberately not migrated to a managed Nextcloud stack.** That's Phase 5's job — and Phase 5 builds a *parallel* stack (Path B) rather than migrating this one.
-- **Cloudflare Tunnel is unchanged.** External users continue to hit `cloud.nimbusnode.org` via Cloudflare's edge → tunnel → AIO Apache on localhost. Nimbus has no involvement in that path. This is split-architecture, not split-brain.
+- **Historical Phase 2 tunnel state:** at this point external users still hit
+  `cloud.nimbusnode.org` via Cloudflare's edge → tunnel → AIO Apache on
+  localhost. Phase 5 later moved the public `cloud.nimbusnode.org` path to
+  nimbus-alb → nimbus-cloud-01, while AIO remains reachable through
+  `cloud.nimbus.local` and `aio.nimbusnode.org`.
 - **Apache binding** to 0.0.0.0 means the AIO listens for HTTP on all interfaces — both ens18 (for Cloudflare) and ens20 (for Nimbus). Fine for a lab. For prod, you'd bind explicitly to specific IPs.

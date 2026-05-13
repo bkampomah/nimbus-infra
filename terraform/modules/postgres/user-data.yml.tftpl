@@ -142,7 +142,7 @@ write_files:
 %{ endfor ~}
 %{ if vault_admin_user != "" ~}
       # Phase 7d — Vault database secrets engine admin role.
-      # SUPERUSER for homelab; tighten in Phase 8.
+      # SUPERUSER for homelab; future hardening can tighten this.
       sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
       DO $pg$
       BEGIN

@@ -101,14 +101,23 @@ Private subnets simply don't get a route to `0.0.0.0/0` except through NAT — w
 - **NACL equivalent:** Proxmox firewall at the **datacenter or node level**. Useful for "block this bad CIDR everywhere, no exceptions."
 
 Current UFW policy on each VM:
-| VM               | Allowed inbound                                      |
-|------------------|------------------------------------------------------|
-| nimbus-alb       | :80/:443 from VPC; :8404 stats from mgmt; :22 mgmt  |
-| nimbus-cloud-01  | :80 from ALB only; :22 from mgmt                    |
-| nimbus-rds       | :5432 from app subnet; :22 from mgmt                |
-| nimbus-s3        | :9000/:9001 from app+data; :22 from mgmt            |
-| nimbus-dns       | :53 from VPC; :8081 API from mgmt; :22 from mgmt   |
-| nimbus-bastion   | :22 from home/office LAN                            |
+| VM               | Allowed inbound                                                |
+|------------------|----------------------------------------------------------------|
+| nimbus-alb       | :80/:443 from VPC + cloudflared network; :8404/:22 from mgmt   |
+| nimbus-cloud-01  | :80 from ALB only; :22 from mgmt                               |
+| nimbus-rds       | :5432 from VPC; :22 from mgmt                                  |
+| nimbus-s3        | :9000 from VPC; :9001 from mgmt/home LAN; :22 from mgmt        |
+| nimbus-dns       | :53 from VPC; :8081 API from mgmt; :22 from mgmt               |
+| nimbus-mon       | :3000/:9090 from mgmt; :3100 from VPC; :22 from mgmt           |
+| nimbus-iam       | :8443 from ALB + mgmt; :22 from mgmt                           |
+| nimbus-vault     | :8200/:8201 from VPC/operator LAN; :22 from mgmt               |
+| nimbus-bastion   | :22 from home/office LAN                                       |
+
+Remote administration from outside the LAN is gated by Tailscale. A Proxmox
+LXC advertises `10.0.0.0/16` and `192.168.1.0/24` as subnet routes and is
+tagged `tag:nimbus-subnet-router`; `.github/tailscale-acl.hujson` limits who
+can use that path. The VM-level UFW rules above still apply after Tailscale
+admits the route.
 
 ---
 
@@ -136,7 +145,11 @@ Each service lives in its own Terraform module under `terraform/modules/` with a
 
 **nimbus-s3** runs MinIO single-node on a dedicated data disk. Nextcloud uses it as Primary Object Storage — all user files are stored as S3 objects, not on local disk. This mirrors the EFS-less S3-native pattern common in AWS-hosted Nextcloud deployments.
 
-Backups: `pgbackrest` on nimbus-rds pushes PostgreSQL WAL and base backups to a dedicated MinIO bucket on nimbus-s3.
+Backups: `pg-backup.timer` on nimbus-rds runs a nightly `pg_dumpall`, stores a local copy under `/var/backups/postgres`, and pushes the compressed dump to the `pg-backups` bucket on nimbus-s3 through a scoped MinIO service account. The bucket is object-lock-enabled with default `COMPLIANCE 30d` retention; Phase 8 migrated the live bucket because object lock must exist at bucket creation time.
+
+MinIO operational rules:
+- Use `/usr/local/bin/mc.minio --config-dir /root/.mc.minio`; do not rely on `/usr/bin/mc`, which can be Midnight Commander.
+- The S3 API is VPC-only in Terraform. Console admin is mgmt/home-LAN scoped and SSO uses Keycloak group names as MinIO policy names.
 
 ---
 
@@ -145,7 +158,8 @@ Backups: `pgbackrest` on nimbus-rds pushes PostgreSQL WAL and base backups to a 
 **nimbus-rds** (`10.0.20.103`) runs PostgreSQL 16 on Ubuntu 24.04 in the data subnet.
 
 - Nextcloud's database lives here (`nextcloud` DB, `nextcloud` user).
-- Backups: `pgbackrest` pushes to MinIO.
+- Keycloak and PowerDNS also store their databases here; no second Postgres VM is used.
+- Backups: `pg-backup.timer` pushes nightly dumps to MinIO `pg-backups`.
 - Graduate path: **CloudNativePG** on a small k3s cluster for real HA + PITR.
 
 ---
@@ -154,6 +168,10 @@ Backups: `pgbackrest` on nimbus-rds pushes PostgreSQL WAL and base backups to a 
 
 **nimbus-dns** (`10.0.100.10`) runs **PowerDNS** with the `gpgsql` backend (authoritative) and the recursor for `.` resolution.
 
+Phase 8 moved authoritative DNS metadata from SQLite to PostgreSQL on
+nimbus-rds. Terraform now manages records against PowerDNS without the old
+single-writer SQLite apply bottleneck.
+
 Zones managed by Terraform via the `pan-net/powerdns` provider:
 
 | Zone             | Purpose                                                  |
@@ -161,7 +179,10 @@ Zones managed by Terraform via the `pan-net/powerdns` provider:
 | `nimbus.local.`  | Internal A records for every VM; split-horizon internal  |
 | `nimbusnode.org.`| Internal override for the public domain (split-horizon)  |
 
-Split-horizon for `cloud.nimbusnode.org`: internal clients resolve to `nimbus-alb` (10.0.1.10); external clients resolve via Cloudflare's public DNS (CNAME to the Cloudflare Tunnel).
+Split-horizon for `cloud.nimbusnode.org`, `aio.nimbusnode.org`, and
+`auth.nimbusnode.org`: internal clients resolve to `nimbus-alb` (10.0.1.10);
+external clients resolve via Cloudflare's public DNS (CNAMEs to the Cloudflare
+Tunnel).
 
 ---
 
@@ -183,10 +204,12 @@ Split-horizon for `cloud.nimbusnode.org`: internal clients resolve to `nimbus-al
 | `nextcloud-aio`     | `cloud.nimbus.local`, `aio.nimbusnode.org`        | 10.0.10.101:11000      |
 | `nextcloud-cloud`   | `cloud-app.nimbus.local`, `cloud.nimbusnode.org`  | 10.0.10.102:80         |
 | `grafana`           | `mon.nimbus.local`                                | 10.0.100.20:3000       |
+| `keycloak`          | `auth.nimbus.local`, `auth.nimbusnode.org`        | 10.0.100.30:8443       |
 
 **Cloudflare Tunnel:** cloudflared runs on nimbus-alb as a systemd service (token-based, no config.yml). Public hostnames in Zero Trust dashboard:
 - `cloud.nimbusnode.org` → `http://127.0.0.1:80` (HAProxy HTTP frontend, routes via host ACL)
 - `aio.nimbusnode.org`   → `http://127.0.0.1:80` (same ALB listener, different HAProxy ACL match)
+- `auth.nimbusnode.org`  → `http://127.0.0.1:80` (same ALB listener, Keycloak backend)
 
 ---
 
@@ -288,11 +311,11 @@ curl -H "Host: cloud.nimbus.local" http://10.0.1.10/
 # Expect: AIO Nextcloud content proxied through HAProxy
 ```
 
-This is the "put the load balancer in front without breaking anything" step. The Cloudflare Tunnel still points at AIO directly at this point — external traffic is unaffected.
+This was the "put the load balancer in front without breaking anything" step. At that point in Phase 4, Cloudflare still pointed at AIO directly, so external traffic was unaffected. The current Cloudflare Tunnel host routing is documented in §11.
 
 ### 4d — Cleanup (Trivial)
 
-- Confirm split-horizon still works: internal `cloud.nimbus.local` resolves to ALB; Cloudflare external traffic still reaches AIO via its own tunnel.
+- Confirm split-horizon works: internal `cloud.nimbus.local` resolves to ALB while current public hostnames route through the nimbus-alb Cloudflare Tunnel.
 - Document the traffic flow (see ARCHITECTURE.md §11).
 - `git tag phase-4-complete && git push --tags`
 
@@ -304,8 +327,8 @@ Phase 5 is where the abstract AWS analogies become concrete. The sub-phases belo
 
 | Sub-phase | What                  | Complexity | Why                                                               |
 |-----------|-----------------------|------------|-------------------------------------------------------------------|
-| 5a        | PostgreSQL module     | Medium     | DB config is fiddly — pg_hba, listen_addresses, pgbackrest wiring |
-| 5b        | MinIO module          | Easy       | Single-node install is simple; mc alias + bucket creation is it   |
+| 5a        | PostgreSQL module     | Medium     | DB config is fiddly — pg_hba, listen_addresses, backup wiring     |
+| 5b        | MinIO module          | Easy       | Single-node install is simple; buckets + service accounts are it  |
 | 5c        | Nextcloud app         | Hard       | `occ maintenance:install` automation via cloud-init is the tricky one |
 | 5d        | ALB + DNS wiring      | Easy       | Same HAProxy backend pattern as Phase 4b; DNS record is one line  |
 | 5e        | Cutover               | Trivial    | A DNS flip — `cloud.nimbusnode.org` CNAME to the Cloudflare Tunnel|
@@ -317,14 +340,15 @@ The hard parts are not the install — `apt install postgresql-16` is one line. 
 - `pg_hba.conf`: must allow connections from the app subnet (`10.0.10.0/24`) with `scram-sha-256`, not just `localhost`. Cloud-init rewrites this file; ordering matters because postgres reads it top-to-bottom.
 - `listen_addresses = '*'`: default is `localhost` only. Must be changed before any remote client can connect.
 - `pg_isready` loop in Nextcloud cloud-init: the app VM boots in parallel with the DB VM. The install script must poll until the DB is accepting connections before running `occ maintenance:install`.
-- pgbackrest: requires an S3-compatible endpoint (MinIO), a stanza, and a WAL archive command in `postgresql.conf`. Set this up before the DB has any real data.
+- `pg-backup.timer`: runs a nightly `pg_dumpall`, keeps a local compressed copy, and pushes to the MinIO `pg-backups` bucket with `/usr/local/bin/mc.minio`.
 
 ### 5b — MinIO module (Easy)
 
 Single-node MinIO on a dedicated data disk (`/dev/sdb` → mounted at `/data/minio`). The install is a binary download + systemd unit. The only gotchas:
 
-- The `mc` CLI is packaged as `mcli` in Ubuntu 24.04 apt repos (conflicts with Midnight Commander). Install `mcli`, not `mc`.
+- Install the upstream MinIO client as `/usr/local/bin/mc.minio`, not `mc`, to avoid collision with Midnight Commander.
 - Create the Nextcloud bucket and IAM-style user (access key + secret) before Nextcloud boots, or the objectstore init fails.
+- Create `pg-backups` with `--with-lock` at bucket creation time; object lock cannot be enabled later on an existing bucket.
 
 ### 5c — Nextcloud app (Hard)
 
@@ -333,7 +357,7 @@ The difficulty is fully automating `occ maintenance:install` in a cloud-init scr
 - **Backslash escaping in PHP class names.** `\OC\Files\ObjectStore\S3` must arrive in `config.php` with single backslashes. Shell quoting and YAML escaping interact — use single-quoted shell strings (`'\OC\Files\ObjectStore\S3'`) in the `occ config:system:set` call.
 - **MinIO path-style vs virtual-hosted.** Nextcloud defaults to virtual-hosted S3 URLs (`bucket.host`). MinIO requires path-style (`host/bucket`). Set `use_path_style = true` or every object operation returns 404.
 - **Heredoc at column 0 breaks YAML.** A `<<EOF` whose terminator sits at column 0 closes the YAML block scalar early. cloud-init silently discards the rest of the file. Use one-liners instead of heredocs inside YAML `|` blocks.
-- **MTU 1420.** The pfSense WAN adds overhead. Without MTU clamping, large downloads (Nextcloud tarball, pgbackrest base backups) hit ICMP fragmentation-needed and stall. Set `mtu: 1420` in netplan on every VM.
+- **MTU 1420.** The pfSense WAN adds overhead. Without MTU clamping, large downloads (Nextcloud tarball, backup pushes) hit ICMP fragmentation-needed and stall. Set `mtu: 1420` in netplan on every VM.
 
 ### 5d — ALB + DNS wiring (Easy)
 
@@ -361,12 +385,30 @@ Update the Cloudflare CNAME for `cloud.nimbusnode.org` to point at the new Cloud
 - **Prometheus** scrapes `node-exporter` (port 9100) from all Nimbus VMs every 15 s.
 - **Loki** receives log streams from **Promtail** agents on each VM.
 - **Grafana** at `mon.nimbus.local:3000` — also reachable via the ALB HTTPS frontend on the same hostname.
-- Every module (`nimbus-alb`, `nimbus-bastion`, `nimbus-mon`) provisions `node-exporter` and `Promtail` via cloud-init at boot.
+- Every VM module provisions `node-exporter` and `Promtail` via cloud-init at boot. Phase 8 fixed log-read permissions so syslog, auth logs, and Grafana logs continue shipping after rebuilds.
+- Grafana 13 provisioning loads deterministic Prometheus/Loki data-source UIDs and the repo-managed `Nimbus` dashboard folder on rebuild.
 
 ---
 
 ## 18. IAM
 
-Planned: **Keycloak** for users/groups/roles + OIDC, and **HashiCorp Vault** for secrets/dynamic DB creds. Together they're the closest FOSS analog to IAM + Secrets Manager + STS.
+| AWS                         | Nimbus equivalent                                      | Status |
+|-----------------------------|--------------------------------------------------------|--------|
+| Cognito / IAM Identity Center | Keycloak (`nimbus-iam`, 10.0.100.30)                | ✅ Phase 7 |
+| Secrets Manager             | Vault KV v2 (`nimbus-vault`, 10.0.100.40)             | ✅ Phase 7 |
+| STS / short-lived credentials | Vault database secrets engine for Nextcloud DB users | ✅ Phase 7/8 |
 
-This is the last phase to tackle — it's the most conceptually loaded piece and easier once the rest of the stack is concrete.
+**Keycloak** is the OIDC identity provider for Nextcloud, Grafana, MinIO console,
+and Vault. Terraform owns the `nimbus` realm, clients, protocol mappers, groups,
+and seed users. The public hostname is `auth.nimbusnode.org` through Cloudflare
+Tunnel; internal ALB access is `auth.nimbus.local`.
+
+**Vault** is internal-only at `vault.nimbus.local:8200`. It uses integrated Raft
+storage, Shamir 3-of-5 unseal, file audit logging shipped by Promtail, KV v2 for
+static secrets, OIDC admin auth through Keycloak, and the database secrets engine
+for Nextcloud's dynamic PostgreSQL credentials. Operators reach it through the
+mgmt subnet or Tailscale; it has no Cloudflare Tunnel.
+
+Phase 8 hardened the IAM edge cases: Nextcloud Vault Agent runtime, the dynamic
+DB role inheritance, Keycloak/OIDC recovery runbooks, MinIO group-claim policy
+mapping, and Tailscale ACL GitOps for remote admin access.

@@ -74,8 +74,8 @@ variable "additional_databases" {
 # Vault's database engine needs a Postgres role with permission to create new
 # users on demand. Empty disables the role creation.
 #
-# In homelab we make it SUPERUSER for simplicity; Phase 8 hardening tightens
-# to membership-of-target-DB-owner + GRANT OPTION.
+# In homelab we make it SUPERUSER for simplicity. Future hardening can tighten
+# this to membership-of-target-DB-owner + GRANT OPTION.
 
 variable "vault_admin_user" {
   description = "Username Vault uses to mint dynamic Postgres credentials. Empty disables."

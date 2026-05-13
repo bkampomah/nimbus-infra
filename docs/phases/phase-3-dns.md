@@ -13,6 +13,10 @@
 | PowerDNS HTTP API | 0.0.0.0:8081 on the VM | Terraform manages records via this |
 | Terraform-managed DNS records | In the auth zones | Internal hostnames for nimbus services |
 
+Current-state note: Phase 3 introduced PowerDNS and split-horizon DNS. Phase 8
+later moved the authoritative backend from SQLite to PostgreSQL `gpgsql` on
+nimbus-rds; the table above reflects the current rebuilt state.
+
 ### Records currently managed
 
 | Record | Resolves to | Why |
@@ -245,15 +249,18 @@ PowerDNS's `webserver-allow-from` ACL doesn't include your workstation's CIDR. T
 ```bash
 cd ~/code/nimbus-infra/terraform
 
-# Stage 1: deploy the VM (PowerDNS provider can't talk to itself yet)
+# Stage 1: deploy data prerequisites first; nimbus-dns stores auth records in nimbus-rds
 ssh-add ~/.ssh/id_ed25519   # bpg provider needs ssh-agent for snippet upload
+terraform apply -target=module.nimbus_rds
+
+# Stage 2: deploy the DNS VM (PowerDNS provider can't talk to itself yet)
 terraform apply -target=module.nimbus_dns
 
 # Wait ~5 minutes for cloud-init: install packages, init gpgsql schema on nimbus-rds,
 # start services, seed zones
 # Watch progress: ssh root@192.168.1.60 'qm terminal <VMID>'  -> "tail -f /var/log/cloud-init-output.log"
 
-# Stage 2: now PowerDNS is up, manage records via the API
+# Stage 3: now PowerDNS is up, manage records via the API
 terraform apply -target='powerdns_record.infra' \
                 -target='powerdns_record.cloud_internal_cname' \
                 -target='powerdns_record.nimbusnode_internal'
