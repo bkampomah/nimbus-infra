@@ -29,6 +29,15 @@ resource "random_password" "keycloak_db" {
   override_special = "!#%&*+-=?@^_"
 }
 
+# PowerDNS gpgsql backend password — Phase 8. Authoritative DNS metadata moves
+# off SQLite and into nimbus-rds so Terraform applies are not bottlenecked by a
+# single-writer sqlite backend.
+resource "random_password" "powerdns_db" {
+  length           = 32
+  special          = true
+  override_special = "!#%&*+-=?@^_"
+}
+
 # Vault Postgres admin password — Phase 7d. The Vault database secrets engine
 # uses this role to mint short-lived per-app credentials.
 resource "random_password" "vault_db_admin" {
@@ -68,6 +77,11 @@ module "nimbus_rds" {
       name     = "keycloak"
       user     = "keycloak"
       password = random_password.keycloak_db.result
+    },
+    {
+      name     = "powerdns"
+      user     = "powerdns"
+      password = random_password.powerdns_db.result
     },
   ]
 
@@ -136,6 +150,12 @@ output "nimbus_rds_password" {
 output "keycloak_db_password" {
   description = "Keycloak DB password on nimbus-rds — used by nimbus-iam"
   value       = random_password.keycloak_db.result
+  sensitive   = true
+}
+
+output "powerdns_db_password" {
+  description = "PowerDNS gpgsql backend password on nimbus-rds — used by nimbus-dns"
+  value       = random_password.powerdns_db.result
   sensitive   = true
 }
 

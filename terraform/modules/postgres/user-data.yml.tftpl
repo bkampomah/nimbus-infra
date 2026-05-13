@@ -179,6 +179,7 @@ write_files:
       DUMP_FILE="$${BACKUP_DIR}/pgdumpall-$${TIMESTAMP}.sql.gz"
 
       MC=/usr/local/bin/mc.minio
+      MC_CONFIG_DIR=/root/.mc.minio
       S3_ALIAS=s3
       S3_BUCKET=${s3_bucket}
       S3_PREFIX=$${HOSTNAME}
@@ -200,9 +201,9 @@ write_files:
       logger "pg-backup: local dump ok $${DUMP_FILE} ($${LOCAL_SIZE})"
 
       # Step 2: push to MinIO (don't fail the whole job if push fails)
-      if [ -x "$${MC}" ] && "$${MC}" --no-color alias list "$${S3_ALIAS}" >/dev/null 2>&1; then
+      if [ -x "$${MC}" ] && "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" alias list "$${S3_ALIAS}" >/dev/null 2>&1; then
         TARGET="$${S3_ALIAS}/$${S3_BUCKET}/$${S3_PREFIX}/$(basename "$${DUMP_FILE}")"
-        if "$${MC}" --no-color cp "$${DUMP_FILE}" "$${TARGET}" >/dev/null 2>&1; then
+        if "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" cp "$${DUMP_FILE}" "$${TARGET}" >/dev/null 2>&1; then
           logger "pg-backup: pushed to $${TARGET}"
         else
           logger -p user.warning "pg-backup: WARNING — failed to push to $${TARGET}"
@@ -232,8 +233,7 @@ write_files:
       StandardOutput=journal
       StandardError=journal
 
-      # Hardening — note /root/.mc.minio is where mc.minio stores its config
-      # (auto-derived from binary name, not the upstream /root/.mc/ path)
+      # Hardening — mc.minio config lives under /root/.mc.minio.
       NoNewPrivileges=true
       ProtectSystem=strict
       ReadWritePaths=/var/backups/postgres /root/.mc.minio
@@ -376,8 +376,9 @@ runcmd:
   - curl -sSfLo /usr/local/bin/mc.minio https://dl.min.io/client/mc/release/linux-amd64/mc
   - chmod +x /usr/local/bin/mc.minio
 
-  # Configure the s3 alias for root (HOME=/root forces config under /root/.mc.minio/)
-  - sudo HOME=/root /usr/local/bin/mc.minio --no-color alias set s3 '${s3_endpoint}' '${s3_access_key}' '${s3_secret_key}'
+  # Configure the s3 alias for root in the explicit mc.minio config directory.
+  - install -d -o root -g root -m 0700 /root/.mc.minio
+  - sudo HOME=/root /usr/local/bin/mc.minio --no-color --config-dir /root/.mc.minio alias set s3 '${s3_endpoint}' '${s3_access_key}' '${s3_secret_key}'
 
   # Pre-create backup dir before systemd timer fires (lesson from 5a)
   - install -d -o postgres -g postgres -m 0700 /var/backups/postgres

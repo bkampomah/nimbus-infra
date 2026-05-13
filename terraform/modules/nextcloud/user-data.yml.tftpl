@@ -73,6 +73,7 @@ packages:
   - php8.3-imagick
   - php8.3-apcu
   - php8.3-redis
+  - redis-server
   - postgresql-client
   - redis-tools
   - unzip
@@ -187,6 +188,16 @@ write_files:
               fastcgi_max_temp_file_size 0;
           }
 
+          location ~ \.mjs$ {
+              try_files $uri /index.php$request_uri;
+              default_type application/javascript;
+              add_header Cache-Control "public, max-age=15778463$asset_immutable";
+              add_header Referrer-Policy "no-referrer" always;
+              add_header X-Content-Type-Options "nosniff" always;
+              add_header X-Frame-Options "SAMEORIGIN" always;
+              access_log off;
+          }
+
           location ~ \.(?:css|js|svg|gif|png|jpg|ico|wasm|tflite|map)$ {
               try_files $uri /index.php$request_uri;
               add_header Cache-Control "public, max-age=15778463$asset_immutable";
@@ -233,7 +244,7 @@ write_files:
     owner: root:root
     permissions: '0640'
     content: |
-      pid_file = "/run/vault-agent.pid"
+      pid_file = "/run/vault-agent/vault-agent.pid"
       exit_after_auth = false
 
       auto_auth {
@@ -302,10 +313,9 @@ write_files:
       Restart=on-failure
       RestartSec=5
 
-      # Allow the agent to write the rendered DB config + reload PHP-FPM.
-      # AmbientCapabilities so the systemctl reload call works without sudo.
-      AmbientCapabilities=
-      NoNewPrivileges=true
+      # The deploy wrapper uses sudoers entries scoped to install + php-fpm
+      # reload. NoNewPrivileges must stay false or sudo cannot elevate.
+      NoNewPrivileges=false
       ProtectSystem=full
 
       [Install]
@@ -407,6 +417,9 @@ write_files:
         --admin-pass='${nextcloud_admin_pw}' \
         --data-dir="$NC_WEBROOT/data"
 
+      systemctl enable --now redis-server
+      printf '%s\n' 'apc.enable_cli=1' > /etc/php/8.3/cli/conf.d/99-nextcloud-apcu.ini
+
       # ── Trusted domain + proxy config ──────────────────────────────────────
 %{ for idx, domain in trusted_domains ~}
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set trusted_domains ${idx} --value="${domain}"
@@ -415,6 +428,13 @@ write_files:
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set overwriteprotocol --value="https"
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set overwritehost --value="${nextcloud_domain}"
       sudo -u www-data php "$NC_WEBROOT/occ" config:system:set default_phone_region --value="US"
+      # Daily expensive jobs run in the early-morning Central window.
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set maintenance_window_start --type=integer --value=9
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set redis host --value="127.0.0.1"
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set redis port --type=integer --value=6379
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set memcache.local --value='\OC\Memcache\APCu'
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set memcache.distributed --value='\OC\Memcache\Redis'
+      sudo -u www-data php "$NC_WEBROOT/occ" config:system:set memcache.locking --value='\OC\Memcache\Redis'
 
       # Trusted proxies = ALB subnet(s)
       idx=0
@@ -458,6 +478,8 @@ write_files:
       # ── nginx + PHP-FPM ────────────────────────────────────────────────────
       rm -f /etc/nginx/sites-enabled/default
       ln -sf /etc/nginx/sites-available/nextcloud /etc/nginx/sites-enabled/nextcloud
+      sed -i 's|^;env\[PATH\] = .*|env[PATH] = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin|' \
+        /etc/php/8.3/fpm/pool.d/www.conf
       systemctl reload php8.3-fpm
       systemctl reload nginx
 

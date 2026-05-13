@@ -17,29 +17,31 @@ resource "proxmox_virtual_environment_file" "user_data" {
 
   source_raw {
     data = templatefile("${path.module}/user-data.yml.tftpl", {
-      hostname             = var.name
-      admin_username       = var.admin_username
-      admin_password       = var.admin_password
-      admin_ssh_keys       = var.admin_ssh_keys
-      minio_root_user      = var.minio_root_user
-      minio_root_password  = var.minio_root_password
-      minio_bucket         = var.minio_bucket
-      pgbackup_access_key  = var.pgbackup_access_key
-      pgbackup_secret_key  = var.pgbackup_secret_key
-      nextcloud_access_key = var.nextcloud_access_key
-      nextcloud_secret_key = var.nextcloud_secret_key
-      kc_backup_access_key = var.kc_backup_access_key
-      kc_backup_secret_key = var.kc_backup_secret_key
-      api_allow_cidrs      = var.api_allow_cidrs
-      console_allow_cidrs  = var.console_allow_cidrs
-      mgmt_allow_cidrs     = var.mgmt_allow_cidrs
-      loki_url             = var.loki_url
-      oidc_issuer_url      = var.oidc_issuer_url
-      oidc_client_id       = var.oidc_client_id
-      oidc_client_secret   = var.oidc_client_secret
-      oidc_role_policy     = var.oidc_role_policy
-      nimbus_ca_pem        = var.nimbus_ca_pem
-      console_redirect_uri = "http://${split("/", var.static_ip)[0]}:9001/oauth_callback"
+      hostname                    = var.name
+      admin_username              = var.admin_username
+      admin_password              = var.admin_password
+      admin_ssh_keys              = var.admin_ssh_keys
+      minio_root_user             = var.minio_root_user
+      minio_root_password         = var.minio_root_password
+      minio_bucket                = var.minio_bucket
+      pgbackup_access_key         = var.pgbackup_access_key
+      pgbackup_secret_key         = var.pgbackup_secret_key
+      nextcloud_access_key        = var.nextcloud_access_key
+      nextcloud_secret_key        = var.nextcloud_secret_key
+      kc_backup_access_key        = var.kc_backup_access_key
+      kc_backup_secret_key        = var.kc_backup_secret_key
+      api_allow_cidrs             = var.api_allow_cidrs
+      console_allow_cidrs         = var.console_allow_cidrs
+      mgmt_allow_cidrs            = var.mgmt_allow_cidrs
+      loki_url                    = var.loki_url
+      oidc_issuer_url             = var.oidc_issuer_url
+      oidc_client_id              = var.oidc_client_id
+      oidc_client_secret          = var.oidc_client_secret
+      oidc_policy_claim_name      = var.oidc_policy_claim_name
+      pgbackup_retention_mode     = upper(var.pgbackup_retention_mode)
+      pgbackup_retention_duration = var.pgbackup_retention_duration
+      nimbus_ca_pem               = var.nimbus_ca_pem
+      console_redirect_uri        = "http://${split("/", var.static_ip)[0]}:9001/oauth_callback"
     })
     file_name = "${var.name}-user-data.yml"
   }

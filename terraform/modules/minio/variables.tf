@@ -228,10 +228,32 @@ variable "oidc_client_secret" {
   default     = ""
 }
 
-variable "oidc_role_policy" {
-  description = "MinIO IAM policy granted to all OIDC-authenticated users. Phase 8 should swap to claim-based per-group policies."
+variable "oidc_policy_claim_name" {
+  description = "JWT claim MinIO reads for OIDC policy names. Keycloak's groups claim maps group names to MinIO policies."
   type        = string
-  default     = "consoleAdmin"
+  default     = "groups"
+}
+
+variable "pgbackup_retention_mode" {
+  description = "Default object-lock retention mode for the pg-backups bucket. Use COMPLIANCE to prevent privileged deletes during the window."
+  type        = string
+  default     = "COMPLIANCE"
+
+  validation {
+    condition     = contains(["COMPLIANCE", "GOVERNANCE"], upper(var.pgbackup_retention_mode))
+    error_message = "pgbackup_retention_mode must be COMPLIANCE or GOVERNANCE."
+  }
+}
+
+variable "pgbackup_retention_duration" {
+  description = "Default object-lock retention duration for new pg-backups objects, formatted for mc retention set (for example, 30d or 1y)."
+  type        = string
+  default     = "30d"
+
+  validation {
+    condition     = can(regex("^[1-9][0-9]*[dy]$", var.pgbackup_retention_duration))
+    error_message = "pgbackup_retention_duration must be a positive day/year duration such as 30d or 1y."
+  }
 }
 
 variable "nimbus_ca_pem" {

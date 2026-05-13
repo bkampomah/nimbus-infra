@@ -96,9 +96,8 @@ write_files:
       CONF_FILE=/etc/grafana/grafana.ini
       RESTART_ON_UPGRADE=true
       PLUGINS_DIR=/var/lib/grafana/plugins
-      PROVISIONING_CFG_DIR=/etc/grafana/provisioning-runtime-disabled
+      PROVISIONING_CFG_DIR=/etc/grafana/provisioning
       PID_FILE_DIR=/run/grafana
-      GF_FEATURE_TOGGLES_DISABLE=provisioning,provisioningFolderMetadata
 
       GF_SERVER_ROOT_URL=${grafana_root_url}
       GF_SERVER_DOMAIN=${trimprefix(trimprefix(grafana_root_url, "https://"), "http://")}
@@ -228,24 +227,35 @@ write_files:
     content: |
       apiVersion: 1
 
+      prune: true
+
+      deleteDatasources:
+        - name: Prometheus
+          orgId: 1
+        - name: Loki
+          orgId: 1
+
       datasources:
         - name: Prometheus
           uid: prometheus
           type: prometheus
+          access: proxy
           url: http://localhost:9090
           isDefault: true
+          editable: false
           jsonData:
             timeInterval: 15s
 
         - name: Loki
           uid: loki
           type: loki
+          access: proxy
           url: http://localhost:3100
+          editable: false
 
   # ── Grafana dashboard provisioning ───────────────────────────────────────
-  # Staged for Phase 8 repair. Grafana 13's provisioning module currently
-  # exits hard in this lab, so PROVISIONING_CFG_DIR points at an empty runtime
-  # directory until datasource/dashboard provisioning is made compatible.
+  # Grafana 13 file provisioning. Keep this enabled so rebuilds automatically
+  # restore the Nimbus folder and dashboard JSON from the repo.
   - path: /etc/grafana/provisioning/dashboards/nimbus.yml
     owner: root:root
     permissions: '0644'
@@ -256,9 +266,10 @@ write_files:
         - name: Nimbus
           orgId: 1
           folder: Nimbus
+          folderUid: nimbus
           type: file
           disableDeletion: false
-          editable: true
+          allowUiUpdates: true
           updateIntervalSeconds: 30
           options:
             path: /var/lib/grafana/dashboards
@@ -327,18 +338,17 @@ write_files:
       fi
 
       # Ensure provisioning dirs exist (grafana apt package may not create them)
+      mkdir -p /etc/grafana/provisioning/access-control
+      mkdir -p /etc/grafana/provisioning/alerting
       mkdir -p /etc/grafana/provisioning/datasources
       mkdir -p /etc/grafana/provisioning/dashboards
-      mkdir -p /etc/grafana/provisioning-runtime-disabled
+      mkdir -p /etc/grafana/provisioning/plugins
       mkdir -p /var/lib/grafana/dashboards
-      # Grafana 13's provisioning module currently exits hard in this lab with
-      # "Datasource provisioning error: data source not found". Keep the files
-      # staged, but point the service at an empty provisioning directory above.
+      # Remove package examples so only Nimbus-owned provisioning files remain.
       rm -f \
         /etc/grafana/provisioning/alerting/sample.yaml \
         /etc/grafana/provisioning/access-control/sample.yaml \
-        /etc/grafana/provisioning/plugins/sample.yaml \
-        /etc/grafana/provisioning/dashboards/nimbus.yml
+        /etc/grafana/provisioning/plugins/sample.yaml
       chown -R root:grafana /etc/grafana/provisioning
       chown -R grafana:grafana /var/lib/grafana/dashboards
       chmod -R 750 /etc/grafana/provisioning
@@ -404,6 +414,7 @@ write_files:
       [Service]
       User=promtail
       Group=promtail
+      SupplementaryGroups=adm grafana
       ExecStart=/usr/local/bin/promtail -config.file=/etc/promtail/promtail.yml
       Restart=on-failure
       RestartSec=5
@@ -444,6 +455,7 @@ write_files:
       fi
 
       useradd --system --no-create-home --shell /bin/false promtail 2>/dev/null || true
+      usermod -aG adm,grafana promtail
       mkdir -p /etc/promtail /var/lib/promtail
       chown promtail:promtail /var/lib/promtail /etc/promtail
 

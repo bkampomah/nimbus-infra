@@ -92,9 +92,11 @@ resource "vault_database_secret_backend_role" "nextcloud" {
     "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}'",
     "GRANT ALL PRIVILEGES ON DATABASE nextcloud TO \"{{name}}\"",
     "GRANT ALL ON SCHEMA public TO \"{{name}}\"",
+    "GRANT \"nextcloud\" TO \"{{name}}\"",
   ]
 
   revocation_statements = [
+    "REVOKE \"nextcloud\" FROM \"{{name}}\"",
     "REASSIGN OWNED BY \"{{name}}\" TO postgres",
     "DROP OWNED BY \"{{name}}\"",
     "REVOKE ALL PRIVILEGES ON DATABASE nextcloud FROM \"{{name}}\"",

@@ -3,48 +3,76 @@
 Cleanup pass after Phase 7 lands. Removes rebuild fragility, manual fixups,
 and architectural debt accumulated through Phases 3–7.
 
+## Completed
+- Grafana 13 datasource/dashboard provisioning repaired. `nimbus-mon` now points
+  `PROVISIONING_CFG_DIR` back at `/etc/grafana/provisioning`, provisions
+  Prometheus/Loki with deterministic UIDs (`prometheus`, `loki`), and restores
+  the `Nimbus` folder plus `nimbus-aws-infra` dashboard from repo JSON.
+- Existing `nimbus-mon` was manually synced on 2026-05-11 because cloud-init
+  user-data changes are ignored on the running VM.
+- Promtail log-read permissions repaired. The monitoring module now adds the
+  `promtail` user to `adm` and `grafana` so `/var/log/syslog`,
+  `/var/log/auth.log`, and Grafana logs are shipped to Loki after rebuild.
+- Nextcloud Vault Agent runtime repaired. The Nextcloud module now writes the
+  agent PID under `/run/vault-agent/` and keeps `NoNewPrivileges=false` so the
+  scoped sudo deploy wrapper can install rendered DB config and reload PHP-FPM.
+- Vault dynamic DB role for Nextcloud repaired and applied on 2026-05-11.
+  Freshly rotated users now inherit the existing `nextcloud` PostgreSQL role;
+  verified by restarting `vault-agent` and confirming Nextcloud stayed healthy.
+- Keycloak admin recovery and OIDC client secret rotation runbooks added.
+- Backup and MinIO client rebuild safety repaired. `pg-backup.service` and
+  `pg-backup.timer` are in the Postgres cloud-init template,
+  `/usr/local/bin/mc.minio` is used instead of `mc`, Postgres/Keycloak backup
+  jobs and MinIO bootstrap use explicit `/root/.mc.minio` config, Keycloak
+  realm export inherits the configured RDS environment instead of falling back
+  to localhost, and the Postgres `host` output now derives from `var.static_ip`
+  instead of guest-agent interface ordering.
+- PowerDNS authoritative backend migrated from SQLite to `gpgsql` on
+  nimbus-rds. Terraform now creates the `powerdns` database credentials,
+  `nimbus-dns` initializes the PostgreSQL schema during rebuild, record replay
+  was verified, and `-parallelism=1` is no longer needed for DNS applies.
+- Proxmox provider SSH uploads now keep agent auth as the default and allow an
+  optional private-key-file fallback for snippet recovery when the provider
+  cannot use the local SSH agent.
+- MinIO console SSO no longer grants `consoleAdmin` to every OIDC login.
+  Keycloak now emits a `groups` claim for the MinIO client, MinIO reads that
+  claim as the policy list, and only the seeded `nimbus-admin` user is placed
+  in the Keycloak `consoleAdmin` group.
+- Fresh `pg-backups` buckets are created with object lock and a default
+  `COMPLIANCE 30d` retention rule. Existing buckets that predate object lock
+  need a one-time migration or rebuild; cloud-init logs a warning instead of
+  failing the entire MinIO bootstrap.
+- MinIO API access remains VPC-only in Terraform (`api_allow_cidrs =
+  [var.vpc_cidr]`). Home-LAN administration should go through Tailscale or the
+  bastion rather than codifying the manual LAN UFW patch.
+- Linux admin identity is canonicalized on `nimbus`: Terraform defaults
+  `var.admin_username` to `nimbus`, all module user-data templates consume that
+  variable, and no `ansible` user references remain in repo code.
+- `scripts/smoke-test.sh` covers post-rebuild external ingress, internal DNS,
+  SSH/service health, app probes, MinIO OIDC claim mode, and pg-backups
+  retention.
+- Tailscale tailnet policy is codified in `.github/tailscale-acl.hujson` and
+  applied by `.github/workflows/tailscale-acl.yml`. The Proxmox LXC subnet
+  router/exit node is modeled as `tag:nimbus-subnet-router`, auto-approved for
+  Nimbus VPC (`10.0.0.0/16`), home LAN (`192.168.1.0/24`), and exit-node
+  advertisements.
+
 ## Phase 7 carry-forward
-- Add Keycloak admin recovery and OIDC client rotation runbooks.
-- Make Nimbus Grafana datasource/dashboard provisioning Grafana-13-safe and
-  point `PROVISIONING_CFG_DIR` back at `/etc/grafana/provisioning`; it points
-  at an empty runtime directory for now so Grafana OIDC can start cleanly.
+- No open Phase 7 runbook carry-forward items.
 
 ## Module fragility (rebuild-vulnerable)
-- pg-backup systemd unit + timer not in cloud-init template. Manually
-  installed twice now. Bake into `modules/postgres`.
-- mc.minio install + alias not in cloud-init. Bake into `modules/minio`:
-  - Binary at `/usr/local/bin/mc.minio` (NOT `mc` — collides with Midnight Commander)
-  - Config under `/root/.mc.minio/` (auto-derived from binary name)
-  - `sudo HOME=/root` or systemd `Environment=` for correct alias-set
-  - `ReadWritePaths=/root/.mc.minio` in `pg-backup.service` unit
-- `modules/postgres/outputs.tf` host output uses fragile `ipv4_addresses[1][0]`.
-  Switch to: `[for ifc in network_interface_names : ifc if ifc != "lo"][0]`
+- No open backup/client rebuild-safety items.
 
-## PowerDNS / SQLite
-- SQLite single-writer forces `-parallelism=1` on every apply.
-  Migrate backend to `gpgsql` now that nimbus-rds exists.
-- `/etc/powerdns/pdns.conf` has duplicate `gsqlite3-pragma-*` lines from
-  debugging. Clean up during migration.
+## PowerDNS backend
+- No open PowerDNS backend migration items.
 
 ## MinIO service quality
-- `/usr/bin/mc` (Midnight Commander) collides with MinIO client.
-  Decision: full-path `/usr/local/bin/mc.minio` everywhere (recommended), or
-  rename to `mcli`, or `apt remove mc`.
-- API allowlist excludes home LAN. Manually patched UFW.
-  Decision: keep tight + Tailscale-only, OR add `192.168.1.0/24` to `s3.tf`.
-- Object lock on `pg-backups` bucket for ransomware-proof backups (deny
-  even root admin from deleting recent versions).
+- Live `nimbus-s3` may still need rebuild/migration before `pg-backups` object
+  lock applies, because older MinIO/S3 behavior requires object lock at bucket
+  creation.
 
 ## Identity / access
-- cloud-init creates user `ansible` but golden template (VMID 9000) has
-  user `nimbus` that takes precedence. Update template references to one
-  canonical user.
-- Tailscale ACL lives only in admin console — codify in repo as
-  `.github/tailscale-acl.json` + GitHub Action that deploys on push.
+- No open tailnet policy items.
 
 ## Operational hygiene
-- Remove `-parallelism=1` note from README after gpgsql migration completes.
-- Document `mc.minio` binary naming convention in README.
-- `scripts/smoke-test.sh` — verify all VMs after rebuild (ping, expected
-  ports, key services healthy).
 - Clean up duplicate NRPT rule on Windows admin box.

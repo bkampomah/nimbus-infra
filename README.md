@@ -66,9 +66,9 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 - All VMs clone from this template via `bpg/proxmox` Terraform provider
 
 ### ✅ Phase 3 — DNS (Route 53 equivalent)
-- nimbus-dns deployed with PowerDNS authoritative (`nimbus.local`, `nimbusnode.org`)
+- nimbus-dns deployed with PowerDNS authoritative (`nimbus.local`, `nimbusnode.org`) on a PostgreSQL `gpgsql` backend in nimbus-rds
 - All VM A records managed by Terraform via `pan-net/powerdns` provider
-- Split-horizon: `cloud.nimbusnode.org` resolves to ALB internally, Cloudflare externally
+- Split-horizon: `cloud.nimbusnode.org` and `aio.nimbusnode.org` resolve to ALB internally, Cloudflare externally
 
 ### ✅ Phase 4 — Load balancer (see ARCHITECTURE.md §15 for build guide)
 - **4a** *(Medium)* — Split `compute.tf` into scoped files; delete Proxmox SG resources in favour of UFW; fix MinIO disk default
@@ -98,13 +98,15 @@ See `ARCHITECTURE.md` for the full AWS-to-Proxmox mapping.
 - **7f** *(Trivial)* — README/service-map updates; Vault init + secret rotation runbooks; remaining runbook polish tracked in Phase 8
 
 ### 🔲 Phase 8 — IaC hardening (see `docs/phases/phase-8-iac-hardening.md` for punch list)
-- Repair Grafana 13 datasource/dashboard provisioning; OIDC works, but dashboard provisioning is temporarily disabled
-- Add Keycloak admin recovery and OIDC client rotation runbooks
-- Bake pg-backup + mc.minio into cloud-init; fix fragile postgres host output
-- Migrate PowerDNS sqlite → gpgsql (drop `-parallelism=1`)
-- MinIO: resolve `mc` binary collision, lock down API allowlist, object lock on pg-backups
-- Reconcile cloud-init `ansible` vs template `nimbus` user; codify Tailscale ACL in repo
-- `scripts/smoke-test.sh` for post-rebuild verification
+- Grafana 13 datasource/dashboard provisioning repaired; `nimbus-mon` now loads the `Nimbus` dashboard folder from repo JSON
+- Promtail log permissions and Nextcloud Vault Agent runtime fixes are in IaC; live VMs were manually synced
+- Nextcloud Vault dynamic DB role fixed and verified with a fresh credential rotation
+- Keycloak admin recovery and OIDC client rotation runbooks added
+- Backup pipelines hardened in IaC: `pg-backup`, Keycloak realm export, explicit `mc.minio` config, static-IP RDS output
+- PowerDNS migrated from SQLite to `gpgsql` on nimbus-rds; DNS record replay verified
+- MinIO: VPC-only API allowlist kept in IaC, console SSO moved to Keycloak group claims, fresh `pg-backups` buckets get `COMPLIANCE 30d` object lock
+- Linux admin identity standardized on `nimbus`; `scripts/smoke-test.sh` covers post-rebuild verification
+- Tailscale ACL codified in `.github/tailscale-acl.hujson`; GitHub Actions tests on PRs and applies on `main`
 
 ---
 
@@ -116,7 +118,8 @@ nimbus-infra/
 ├── ARCHITECTURE.md                  ← AWS-to-Proxmox mapping in depth
 ├── NOTES.md                         ← lab journal, gotchas, decisions
 ├── .github/
-│   └── workflows/terraform.yml      ← CI: fmt, validate, best-effort plan, drift check
+│   ├── tailscale-acl.hujson         ← Tailscale tailnet policy for Nimbus admin access
+│   └── workflows/                   ← CI: Terraform and Tailscale policy checks
 ├── scripts/
 │   └── update-upgrade.sh            ← utility: apt update + upgrade all VMs
 ├── terraform/
@@ -163,6 +166,9 @@ nimbus-infra/
     └── runbooks/
         ├── internal-ca.md
         ├── grafana-dashboard.md
+        ├── keycloak-admin-recovery.md
+        ├── oidc-client-rotation.md
+        ├── tailscale-acl.md
         ├── vault-init.md
         └── vault-secret-rotation.md
 ```
@@ -236,6 +242,9 @@ terraform apply
 - **LE cert renewal:** acme.sh auto-renews via cron on nimbus-alb; deploy hook reloads HAProxy.
 - **step-ca cert renewal:** `step ca renew` on nimbus-alb before 2026-07-29, then `systemctl reload haproxy`.
 - **Grafana dashboard:** `terraform/modules/monitoring/dashboards/nimbus-aws-infrastructure.json` is loaded into the `Nimbus` folder by provisioning; see `docs/runbooks/grafana-dashboard.md`.
+- **Keycloak admin recovery:** reset `nimbus-admin` through the master break-glass admin; see `docs/runbooks/keycloak-admin-recovery.md`.
+- **OIDC client rotation:** rotate one client at a time and push the new secret to the app; see `docs/runbooks/oidc-client-rotation.md`.
+- **MinIO client naming:** use `/usr/local/bin/mc.minio --config-dir /root/.mc.minio`; do not rely on `/usr/bin/mc`, which can be Midnight Commander.
 - **Drift detection:** run `terraform plan` — any diff means manual changes have been made to VMs.
 - **Secrets rotation:** rotate `tf-token` quarterly; update `terraform.tfvars`.
 

@@ -31,9 +31,8 @@ Post-apply runtime pushes are complete: OIDC config was applied to
 certificate bundle was refreshed and now covers `mon.nimbus.local`,
 `auth.nimbus.local`, and `auth.nimbusnode.org`.
 
-Remaining follow-ups are tracked in Phase 8: Grafana 13 dashboard/data-source
-provisioning repair, Keycloak admin recovery runbook, and OIDC client rotation
-runbook.
+Phase 8 has since repaired Grafana 13 dashboard/data-source provisioning and
+added the Keycloak admin recovery plus OIDC client rotation runbooks.
 
 ---
 
@@ -61,14 +60,14 @@ runbook.
 - **Trust-store install** — app cloud-init writes `nimbus-ca.crt` to `/usr/local/share/ca-certificates/` and runs `update-ca-certificates`. No `tls_skip_verify` flags anywhere.
 - **Nextcloud:** `occ app:install user_oidc` + `occ user_oidc:provider Keycloak --discoveryuri ...` runs after `maintenance:install`. UID/email/displayname mapping wired.
 - **Grafana:** `/etc/default/grafana-server` renders with `GF_AUTH_GENERIC_OAUTH_*` env vars. `GF_SERVER_ROOT_URL=https://mon.nimbus.local` so OIDC redirects come back via the ALB. Role mapping JMESPath: `grafana-admins → Admin`, `grafana-editors → Editor`, else `Viewer`. Backed by a `keycloak_openid_group_membership_protocol_mapper` on the grafana client that adds a `groups` claim.
-- **MinIO console:** `MINIO_IDENTITY_OPENID_*` is appended to `/etc/default/minio`. Every OIDC user gets `consoleAdmin` via `MINIO_IDENTITY_OPENID_ROLE_POLICY` (homelab-grade; Phase 8 swaps to per-group claim-based policies).
-- **Groups in Keycloak:** `grafana-admins` + `grafana-editors`. Seed `nimbus-admin` user is placed in `grafana-admins` so the "log in via Keycloak, land in Grafana as Admin" smoke test works without manual UI clicks.
+- **MinIO console:** `MINIO_IDENTITY_OPENID_*` is appended to `/etc/default/minio`. Phase 8 switched MinIO from blanket `ROLE_POLICY=consoleAdmin` to `CLAIM_NAME=groups`; only Keycloak users in a group whose name matches a MinIO policy get permissions.
+- **Groups in Keycloak:** `grafana-admins`, `grafana-editors`, `vault-admins`, and MinIO's `consoleAdmin` policy group. Seed `nimbus-admin` user is placed in admin groups so SSO smoke tests work without manual UI clicks.
 - **Break-glass:** local admin user retained on every app — `nimbus` (Nextcloud admin), default Grafana admin, MinIO root.
 
 #### Smoke tests (run after app OIDC config is pushed or VMs are rebuilt)
 1. **Nextcloud:** open `https://cloud.nimbusnode.org` → "Log in with Keycloak" link → enter `nimbus-test` + temporary password → forced rotation → land in Nextcloud.
 2. **Grafana:** open `https://mon.nimbus.local` → "Sign in with Keycloak" → as `nimbus-admin` → confirm Org Role = Admin in user profile.
-3. **MinIO console:** open `http://10.0.20.101:9001` → "Login with SSO" → confirm bucket list visible.
+3. **MinIO console:** open `http://10.0.20.101:9001` → "Login with SSO" as `nimbus-admin` → confirm bucket list visible. Regular users without the `consoleAdmin` group should not receive MinIO permissions.
 4. Each app: confirm local admin login still works (break-glass).
 
 ### 7d — Vault bootstrap *(Hard)* — ✅ done
@@ -107,6 +106,8 @@ runbook.
 ### 7f — Runbooks + cutover *(Trivial)* — ✅ done
 - `docs/runbooks/vault-init.md` — one-time init/unseal procedure
 - `docs/runbooks/vault-secret-rotation.md` — rotating KV, static, and dynamic secrets
+- `docs/runbooks/keycloak-admin-recovery.md` — recovering `nimbus-admin` access
+- `docs/runbooks/oidc-client-rotation.md` — rotating Keycloak OIDC client secrets
 - README phase-table update; AWS service map: Cognito → Keycloak (was IAM combined)
 - Remaining hardening and runbook polish moved to Phase 8
 

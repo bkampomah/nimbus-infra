@@ -8,9 +8,10 @@
 |---|---|---|
 | nimbus-dns VM (VMID 111) | 10.0.100.10 in nimbus-mgmt | PowerDNS auth + recursor |
 | PowerDNS auth (`pdns`) | 127.0.0.1:5300 on the VM | Authoritative for `nimbus.local`, `nimbusnode.org` |
+| PowerDNS backend | `powerdns` database on nimbus-rds | Durable `gpgsql` storage for zones and records |
 | PowerDNS recursor (`pdns-recursor`) | 0.0.0.0:53 on the VM | Client-facing; forwards external lookups, queries auth for internal |
 | PowerDNS HTTP API | 0.0.0.0:8081 on the VM | Terraform manages records via this |
-| 5 DNS A records | In the auth zones | Internal hostnames for nimbus services |
+| Terraform-managed DNS records | In the auth zones | Internal hostnames for nimbus services |
 
 ### Records currently managed
 
@@ -20,7 +21,12 @@
 | `nimbus-alb.nimbus.local` | 10.0.1.10 | Load balancer |
 | `nimbus-cloud-aio.nimbus.local` | 10.0.10.101 | Direct AIO (bypass ALB if needed) |
 | `cloud.nimbus.local` | 10.0.1.10 | User-facing — routes through ALB |
-| `cloud.nimbusnode.org` (internal only) | 10.0.10.101 | Split-horizon: external goes to Cloudflare |
+| `cloud.nimbusnode.org` (internal only) | 10.0.1.10 | Split-horizon: external goes to Cloudflare |
+| `aio.nimbusnode.org` (internal only) | 10.0.1.10 | Split-horizon AIO path through ALB |
+| `nimbus-rds.nimbus.local` | 10.0.20.103 | PostgreSQL |
+| `nimbus-s3.nimbus.local` | 10.0.20.101 | MinIO |
+| `auth.nimbus.local`, `auth.nimbusnode.org` | 10.0.1.10 | Keycloak through ALB |
+| `vault.nimbus.local` | 10.0.100.40 | Vault |
 
 ## Architecture
 
@@ -44,7 +50,7 @@ graph TB
     Phone -. "HTTPS" .-> CFEdge
 
     VPCClient -- "cloud.nimbusnode.org" --> DNSVM
-    DNSVM -- "returns 10.0.10.101 (AIO)" --> VPCClient
+    DNSVM -- "returns 10.0.1.10 (ALB)" --> VPCClient
 
     DNSVM -- "recursive resolution<br/>for unknown names" --> ExtResolver
 ```
@@ -87,7 +93,7 @@ dig @10.0.100.10 google.com +short
 
 # 6. Split-horizon — internal answer
 dig @10.0.100.10 cloud.nimbusnode.org +short
-# Expect: 10.0.10.101 (the AIO)
+# Expect: 10.0.1.10 (the ALB)
 
 # 7. Split-horizon — external answer (run from outside Nimbus)
 dig @1.1.1.1 cloud.nimbusnode.org +short
@@ -96,6 +102,14 @@ dig @1.1.1.1 cloud.nimbusnode.org +short
 # 8. API reachable
 curl -s -o /dev/null -w "HTTP:%{http_code}\n" http://10.0.100.10:8081/api/v1/servers
 # Expect: HTTP:401 (good — means listening, just wants auth)
+
+# 9. Auth backend is PostgreSQL, not SQLite
+ssh nimbus@10.0.100.10 'sudo grep -E "^(launch|gpgsql-host|gpgsql-dbname|gpgsql-user)=" /etc/powerdns/pdns.conf'
+# Expect: launch=gpgsql plus nimbus-rds connection settings
+
+# 10. PostgreSQL backend contains zones and records
+ssh nimbus@10.0.20.103 'sudo -u postgres psql -d powerdns -c "select count(*) as domains from domains; select count(*) as records from records;"'
+# Expect: 2 domains and nonzero records
 ```
 
 ## Operational tasks
@@ -187,21 +201,40 @@ shred -u /tmp/tf-key.txt
 ```
 
 ### "API returns empty / 503 / hangs forever"
-The auth server (`pdns`) crashed but the recursor is fine. Most common cause: the SQLite DB file got deleted from `/var/lib/powerdns/`. Recreate:
+The auth server (`pdns`) crashed but the recursor is fine. With the Phase 8
+`gpgsql` backend, common causes are a missing PostgreSQL schema, a bad backend
+password in `/etc/powerdns/pdns.conf`, or nimbus-rds being unavailable. Check:
+```bash
+ssh nimbus@10.0.100.10 'sudo systemctl status pdns --no-pager | head -30'
+ssh nimbus@10.0.100.10 'sudo grep -E "^(launch|gpgsql-host|gpgsql-dbname|gpgsql-user)=" /etc/powerdns/pdns.conf'
+ssh nimbus@10.0.20.103 'sudo -u postgres psql -d powerdns -c "\dt"'
+```
+
+If the `powerdns` database exists but has no tables, initialize the schema and
+replay Terraform-managed records:
 ```bash
 ssh nimbus@10.0.100.10
 sudo systemctl stop pdns
-sudo find /usr/share -name "schema.sqlite3.sql" 2>/dev/null
-# Use that path:
-sudo sqlite3 /var/lib/powerdns/pdns.sqlite3 < /usr/share/pdns-backend-sqlite3/schema/schema.sqlite3.sql
-sudo chown -R pdns:pdns /var/lib/powerdns
+SCHEMA="$(find /usr/share -name schema.pgsql.sql | head -1)"
+sudo install -o root -g root -m 0600 /dev/null /run/powerdns-db-pass
+sudo editor /run/powerdns-db-pass   # paste the Terraform powerdns_db_password
+sudo env PGPASSWORD="$(sudo cat /run/powerdns-db-pass)" \
+  psql -h 10.0.20.103 -U powerdns -d powerdns -f "$SCHEMA"
+sudo shred -u /run/powerdns-db-pass
 sudo systemctl start pdns
-# Recreate zones
-sudo pdnsutil create-zone nimbus.local ns1.nimbus.local.
-sudo pdnsutil create-zone nimbusnode.org ns1.nimbusnode.org.
-# Then re-apply Terraform records:
+
+# Then re-apply Terraform records from your workstation:
 cd ~/code/nimbus-infra/terraform
-terraform apply -target='powerdns_record.infra' -target='powerdns_record.cloud_internal_cname' -target='powerdns_record.nimbusnode_internal'
+terraform apply -target='powerdns_record.infra' \
+                -target='powerdns_record.cloud_internal_cname' \
+                -target='powerdns_record.nimbusnode_internal' \
+                -target='powerdns_record.nimbus_bastion' \
+                -target='powerdns_record.nimbus_rds' \
+                -target='powerdns_record.nimbus_s3' \
+                -target='powerdns_record.nimbus_iam_alb' \
+                -target='powerdns_record.nimbus_iam_direct' \
+                -target='powerdns_record.nimbus_iam_public_internal' \
+                -target='powerdns_record.nimbus_vault'
 ```
 
 ### "API key works from VM (curl localhost) but not from WSL"
@@ -216,7 +249,8 @@ cd ~/code/nimbus-infra/terraform
 ssh-add ~/.ssh/id_ed25519   # bpg provider needs ssh-agent for snippet upload
 terraform apply -target=module.nimbus_dns
 
-# Wait ~5 minutes for cloud-init: install packages, init SQLite, start services, seed zones
+# Wait ~5 minutes for cloud-init: install packages, init gpgsql schema on nimbus-rds,
+# start services, seed zones
 # Watch progress: ssh root@192.168.1.60 'qm terminal <VMID>'  -> "tail -f /var/log/cloud-init-output.log"
 
 # Stage 2: now PowerDNS is up, manage records via the API
@@ -227,13 +261,13 @@ terraform apply -target='powerdns_record.infra' \
 
 If anything in cloud-init fails, the runbook fix is:
 1. Read `/var/log/cloud-init-output.log` on the VM
-2. Most common is one of: systemd-resolved conflict, sqlite schema, recursor config syntax — all addressed in the cloud-init template by Phase 4a's bug fixes
+2. Most common is one of: systemd-resolved conflict, gpgsql connectivity/schema, recursor config syntax — all addressed in the cloud-init template
 3. Manual recovery follows the relevant "Common failures" section above
 
 ## Tech debt and notes
 
 - **The cloud-init template went through 5 bug fixes** during initial deployment. Currently believed clean — would benefit from a fresh rebuild test someday to prove it.
-- **Records are sensitive to the chicken-and-egg problem.** First apply must use `-target=module.nimbus_dns`. Subsequent applies can be plain `terraform apply` because the API will be reachable.
+- **Records are sensitive to the chicken-and-egg problem.** First apply must use `-target=module.nimbus_dns`, and nimbus-rds must already exist because `nimbus-dns` initializes its `gpgsql` schema there. Subsequent applies can be plain `terraform apply` because the API will be reachable.
 - **The DNS VM has no HA.** If it dies, internal name resolution breaks for all of Nimbus. For a lab, fine. For prod, you'd run two recursors with VRRP/keepalived.
 - **API key is in Terraform state**, which is at rest on your laptop. Encrypt the state at rest or use Terraform Cloud / S3-with-KMS for any real environment.
 - **Forward-zones syntax** in recursor config is `forward-zones=zone1=ip,zone2=ip` (single line, comma-separated). Do NOT use `forward-zones+=...` append syntax — fails without a base.

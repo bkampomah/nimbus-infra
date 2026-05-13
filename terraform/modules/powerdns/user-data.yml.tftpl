@@ -12,8 +12,8 @@
 #   1. Ubuntu 24.04 ships systemd-resolved on :53 - disable it before pdns-recursor
 #   2. pdns-recursor 5.x "forward-zones+=" append syntax needs a parent; use
 #      single-line "forward-zones=a=x, b=y" form instead
-#   3. The pdns-backend-sqlite3 package does NOT auto-create the database;
-#      we initialize it from the schema file before starting pdns
+#   3. The pdns-backend-pgsql package does NOT auto-create the database
+#      schema; we initialize it on nimbus-rds before starting pdns
 #   4. The zone-seed step must run AFTER pdns is fully up, not in parallel
 #   5. /etc/resolv.conf gets symlinked to systemd-resolved's stub by default;
 #      after we disable resolved, we point it at 127.0.0.1 so the VM can
@@ -63,9 +63,9 @@ package_upgrade: true
 packages:
   - qemu-guest-agent
   - pdns-server
-  - pdns-backend-sqlite3
+  - pdns-backend-pgsql
   - pdns-recursor
-  - sqlite3
+  - postgresql-client
   - chrony
   - unattended-upgrades
   - curl
@@ -79,9 +79,12 @@ write_files:
     owner: root:root
     permissions: '0640'
     content: |
-      launch=gsqlite3
-      gsqlite3-database=/var/lib/powerdns/pdns.sqlite3
-      gsqlite3-pragma-synchronous=0
+      launch=gpgsql
+      gpgsql-host=${backend_db_host}
+      gpgsql-port=${backend_db_port}
+      gpgsql-dbname=${backend_db_name}
+      gpgsql-user=${backend_db_user}
+      gpgsql-password=${backend_db_pass}
 
       local-address=127.0.0.1
       local-port=5300
@@ -129,24 +132,42 @@ write_files:
       #!/bin/bash
       set -euo pipefail
 
+      # Cloud-init writes pdns.conf before the pdns group may exist. Tighten it
+      # after package install but before starting the service.
+      chgrp pdns /etc/powerdns/pdns.conf
+      chmod 0640 /etc/powerdns/pdns.conf
+
       echo "== Step 1: disable systemd-resolved (owns :53 by default on Ubuntu 24.04)"
       systemctl disable --now systemd-resolved || true
       rm -f /etc/resolv.conf
       echo "nameserver 127.0.0.1" > /etc/resolv.conf
 
-      echo "== Step 2: initialize the SQLite database (package does NOT do this)"
-      mkdir -p /var/lib/powerdns
-      if [ ! -s /var/lib/powerdns/pdns.sqlite3 ]; then
-        SCHEMA=$(find /usr/share -name "schema.sqlite3.sql" 2>/dev/null | head -1)
+      echo "== Step 2: initialize the gpgsql schema on nimbus-rds"
+      SCHEMA_READY=$(
+        PGPASSWORD='${backend_db_pass}' psql \
+          -h '${backend_db_host}' \
+          -p '${backend_db_port}' \
+          -U '${backend_db_user}' \
+          -d '${backend_db_name}' \
+          -Atc "SELECT to_regclass('public.domains') IS NOT NULL" \
+          2>/dev/null || true
+      )
+      if [ "$SCHEMA_READY" != "t" ]; then
+        SCHEMA=$(find /usr/share -name "schema.pgsql.sql" 2>/dev/null | head -1)
         if [ -z "$SCHEMA" ]; then
           echo "Schema file not found - reinstalling backend"
-          apt-get install --reinstall -y pdns-backend-sqlite3
-          SCHEMA=$(find /usr/share -name "schema.sqlite3.sql" 2>/dev/null | head -1)
+          apt-get install --reinstall -y pdns-backend-pgsql
+          SCHEMA=$(find /usr/share -name "schema.pgsql.sql" 2>/dev/null | head -1)
         fi
         echo "Using schema: $SCHEMA"
-        sqlite3 /var/lib/powerdns/pdns.sqlite3 < "$SCHEMA"
+        PGPASSWORD='${backend_db_pass}' psql \
+          -h '${backend_db_host}' \
+          -p '${backend_db_port}' \
+          -U '${backend_db_user}' \
+          -d '${backend_db_name}' \
+          -v ON_ERROR_STOP=1 \
+          -f "$SCHEMA"
       fi
-      chown -R pdns:pdns /var/lib/powerdns
 
       echo "== Step 3: start pdns (authoritative) and wait for it"
       systemctl enable --now pdns

@@ -36,8 +36,8 @@ sudo systemctl status vault-agent
 sudo journalctl -u vault-agent -n 50
 
 # What creds is Nextcloud using right now?
-sudo cat /var/lib/vault-agent/db.config.php
-# Should show a username like "v-approle-nextcloud-XXXX" and a fresh password.
+sudo -u www-data php /var/www/nextcloud/occ config:system:get dbuser
+# Should show a username like "v-approle-nextclou-XXXX".
 
 # Confirm Postgres sees the dynamic role
 psql -h 10.0.20.103 -U postgres -c "\du+" | grep approle

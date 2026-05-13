@@ -4,18 +4,13 @@
 #
 # Scope:
 #   - One VM, running:
-#       * pdns_server  (authoritative, SQLite backend for simplicity)
+#       * pdns_server  (authoritative, PostgreSQL backend on nimbus-rds)
 #       * pdns_recursor (for forwarding google.com / github.com / etc.)
 #       * pdns.conf API enabled so Terraform can manage records
 #   - Split-horizon ready: authoritative serves nimbus.local AND
 #     nimbusnode.org internally; external clients still hit Cloudflare.
 #   - Clients in Nimbus point at this VM's IP for DNS.
 #
-# Why SQLite and not MySQL/Postgres: lab-scale, zero extra moving parts,
-# PowerDNS supports it out of the box. Swap to the gpgsql backend (hitting
-# nimbus-rds) once you have real scale — but for hundreds of records it's
-# pointless.
-
 terraform {
   required_providers {
     proxmox = {
@@ -55,6 +50,11 @@ resource "proxmox_virtual_environment_file" "user_data" {
       recursor_forwards = var.recursor_forwards
       upstream_dns      = var.upstream_dns
       internal_zones    = var.internal_zones
+      backend_db_host   = var.backend_db_host
+      backend_db_port   = var.backend_db_port
+      backend_db_name   = var.backend_db_name
+      backend_db_user   = var.backend_db_user
+      backend_db_pass   = var.backend_db_password
       loki_url          = var.loki_url
     })
   }

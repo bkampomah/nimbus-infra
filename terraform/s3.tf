@@ -69,14 +69,16 @@ module "nimbus_s3" {
   mgmt_allow_cidrs    = var.mgmt_allow_cidrs
   loki_url            = module.nimbus_mon.loki_url
 
-  # Phase 7c — MinIO console OIDC SSO via Keycloak. role_policy=consoleAdmin
-  # gives every Keycloak-authenticated user full MinIO admin in homelab; tighten
-  # via per-group claim mapping in Phase 8.
-  oidc_issuer_url    = "https://${var.keycloak_domain}/realms/${keycloak_realm.nimbus.realm}"
-  oidc_client_id     = keycloak_openid_client.minio_console.client_id
-  oidc_client_secret = keycloak_openid_client.minio_console.client_secret
-  oidc_role_policy   = "consoleAdmin"
-  nimbus_ca_pem      = tls_self_signed_cert.nimbus_ca.cert_pem
+  # Phase 8 — MinIO console OIDC SSO maps the Keycloak `groups` claim to
+  # MinIO policy names. Only members of the `consoleAdmin` group inherit the
+  # built-in MinIO consoleAdmin policy.
+  oidc_issuer_url             = "https://${var.keycloak_domain}/realms/${keycloak_realm.nimbus.realm}"
+  oidc_client_id              = keycloak_openid_client.minio_console.client_id
+  oidc_client_secret          = keycloak_openid_client.minio_console.client_secret
+  oidc_policy_claim_name      = "groups"
+  pgbackup_retention_mode     = "COMPLIANCE"
+  pgbackup_retention_duration = "30d"
+  nimbus_ca_pem               = tls_self_signed_cert.nimbus_ca.cert_pem
 }
 
 # Internal DNS ----------------------------------------------------------------

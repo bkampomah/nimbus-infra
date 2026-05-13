@@ -30,6 +30,11 @@ module "nimbus_dns" {
   upstream_dns   = ["1.1.1.1", "9.9.9.9"]
   internal_zones = ["nimbus.local", "nimbusnode.org"]
 
+  backend_db_host     = var.nimbus_rds_ip
+  backend_db_name     = "powerdns"
+  backend_db_user     = "powerdns"
+  backend_db_password = random_password.powerdns_db.result
+
   api_allow_cidrs  = var.mgmt_allow_cidrs
   mgmt_allow_cidrs = var.mgmt_allow_cidrs
   loki_url         = module.nimbus_mon.loki_url
@@ -72,6 +77,7 @@ resource "powerdns_record" "cloud_internal_cname" {
 resource "powerdns_record" "nimbusnode_internal" {
   for_each = {
     "cloud.nimbusnode.org." = var.nimbus_alb_ip
+    "aio.nimbusnode.org."   = var.nimbus_alb_ip
   }
 
   zone    = "nimbusnode.org."

@@ -59,6 +59,35 @@ variable "internal_zones" {
   default     = ["nimbus.local", "nimbusnode.org"]
 }
 
+variable "backend_db_host" {
+  description = "PostgreSQL host for the PowerDNS gpgsql backend"
+  type        = string
+}
+
+variable "backend_db_port" {
+  description = "PostgreSQL port for the PowerDNS gpgsql backend"
+  type        = number
+  default     = 5432
+}
+
+variable "backend_db_name" {
+  description = "PostgreSQL database name for the PowerDNS gpgsql backend"
+  type        = string
+  default     = "powerdns"
+}
+
+variable "backend_db_user" {
+  description = "PostgreSQL role for the PowerDNS gpgsql backend"
+  type        = string
+  default     = "powerdns"
+}
+
+variable "backend_db_password" {
+  description = "PostgreSQL password for the PowerDNS gpgsql backend"
+  type        = string
+  sensitive   = true
+}
+
 variable "api_allow_cidrs" {
   description = "CIDRs allowed to hit the PowerDNS HTTP API"
   type        = list(string)

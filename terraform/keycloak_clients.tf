@@ -76,8 +76,9 @@ resource "keycloak_openid_group_membership_protocol_mapper" "grafana_groups" {
 }
 
 # ── MinIO console ───────────────────────────────────────────────────────────
-# Console redirects to /oauth_callback. We list both the direct VM URL and
-# the eventual nimbus.local hostname (added in Phase 8).
+# Console redirects to /oauth_callback. MinIO reads the `groups` claim as a
+# policy list; only Keycloak groups with names matching MinIO policies grant
+# access.
 
 resource "keycloak_openid_client" "minio_console" {
   realm_id  = keycloak_realm.nimbus.id
@@ -101,6 +102,17 @@ resource "keycloak_openid_client" "minio_console" {
   ]
 
   login_theme = "keycloak"
+}
+
+resource "keycloak_openid_group_membership_protocol_mapper" "minio_groups" {
+  realm_id            = keycloak_realm.nimbus.id
+  client_id           = keycloak_openid_client.minio_console.id
+  name                = "groups"
+  claim_name          = "groups"
+  full_path           = false
+  add_to_id_token     = true
+  add_to_access_token = true
+  add_to_userinfo     = true
 }
 
 # ── Vault ───────────────────────────────────────────────────────────────────

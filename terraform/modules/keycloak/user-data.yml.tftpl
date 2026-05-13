@@ -219,6 +219,7 @@ write_files:
       DUMP_FILE="$${BACKUP_DIR}/kc-export-$${TIMESTAMP}.tar.gz"
 
       MC=/usr/local/bin/mc.minio
+      MC_CONFIG_DIR=/root/.mc.minio
       S3_ALIAS=s3
       S3_BUCKET=${backup_s3_bucket}
       S3_PREFIX=$${HOSTNAME}
@@ -232,9 +233,14 @@ write_files:
       # restart even if export fails
       trap 'systemctl start keycloak' EXIT
 
+      : "$${KC_DB_URL:?KC_DB_URL must be set by kc-backup.service EnvironmentFile}"
+      : "$${KC_DB_USERNAME:?KC_DB_USERNAME must be set by kc-backup.service EnvironmentFile}"
+      : "$${KC_DB_PASSWORD:?KC_DB_PASSWORD must be set by kc-backup.service EnvironmentFile}"
+      export KC_DB="$${KC_DB:-postgres}"
+      export KC_DB_URL KC_DB_USERNAME KC_DB_PASSWORD
+
 %{ for realm in backup_realms ~}
-      sudo -u keycloak \
-        KC_DB=postgres \
+      sudo -E -u keycloak \
         "$${KC_HOME}/bin/kc.sh" export \
           --dir "$${EXPORT_DIR}" \
           --realm "${realm}" \
@@ -258,9 +264,9 @@ write_files:
       logger "kc-backup: local dump ok $${DUMP_FILE} ($${LOCAL_SIZE})"
 
       # Push to MinIO (don't fail the whole job if push fails)
-      if [ -x "$${MC}" ] && "$${MC}" --no-color alias list "$${S3_ALIAS}" >/dev/null 2>&1; then
+      if [ -x "$${MC}" ] && "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" alias list "$${S3_ALIAS}" >/dev/null 2>&1; then
         TARGET="$${S3_ALIAS}/$${S3_BUCKET}/$${S3_PREFIX}/$(basename "$${DUMP_FILE}")"
-        if "$${MC}" --no-color cp "$${DUMP_FILE}" "$${TARGET}" >/dev/null 2>&1; then
+        if "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" cp "$${DUMP_FILE}" "$${TARGET}" >/dev/null 2>&1; then
           logger "kc-backup: pushed to $${TARGET}"
         else
           logger -p user.warning "kc-backup: WARNING — failed to push to $${TARGET}"
@@ -284,11 +290,12 @@ write_files:
 
       [Service]
       Type=oneshot
+      EnvironmentFile=/etc/keycloak/keycloak.env
       ExecStart=/usr/local/bin/kc-backup.sh
       StandardOutput=journal
       StandardError=journal
 
-      # mc.minio config under /root/.mc.minio (auto-derived from binary name).
+      # mc.minio config lives under /root/.mc.minio.
       NoNewPrivileges=true
       ProtectSystem=strict
       ReadWritePaths=/var/backups/keycloak /root/.mc.minio /opt/keycloak/data
@@ -441,8 +448,9 @@ runcmd:
   # MinIO client — named mc.minio to avoid /usr/bin/mc (Midnight Commander) collision.
   - curl -sSfLo /usr/local/bin/mc.minio https://dl.min.io/client/mc/release/linux-amd64/mc
   - chmod +x /usr/local/bin/mc.minio
-  # Configure the s3 alias (HOME=/root forces config under /root/.mc.minio/)
-  - sudo HOME=/root /usr/local/bin/mc.minio --no-color alias set s3 '${backup_s3_endpoint}' '${backup_s3_access_key}' '${backup_s3_secret_key}'
+  # Configure the s3 alias for root in the explicit mc.minio config directory.
+  - install -d -o root -g root -m 0700 /root/.mc.minio
+  - sudo HOME=/root /usr/local/bin/mc.minio --no-color --config-dir /root/.mc.minio alias set s3 '${backup_s3_endpoint}' '${backup_s3_access_key}' '${backup_s3_secret_key}'
   - install -d -o keycloak -g keycloak -m 0700 /var/backups/keycloak
   - systemctl daemon-reload
   - systemctl enable --now kc-backup.timer

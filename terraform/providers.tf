@@ -52,7 +52,8 @@ provider "proxmox" {
   insecure  = true
 
   ssh {
-    agent    = true
-    username = var.proxmox_ssh_username
+    agent       = var.proxmox_ssh_agent
+    username    = var.proxmox_ssh_username
+    private_key = var.proxmox_ssh_private_key_file != "" ? file(pathexpand(var.proxmox_ssh_private_key_file)) : null
   }
 }

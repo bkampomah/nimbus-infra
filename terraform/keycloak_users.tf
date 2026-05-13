@@ -107,6 +107,14 @@ resource "keycloak_group" "vault_admins" {
   name     = "vault-admins"
 }
 
+# Phase 8 — MinIO reads Keycloak group names as policy names. The built-in
+# `consoleAdmin` policy grants full console/admin access; do not add regular
+# users here unless they should administer MinIO.
+resource "keycloak_group" "minio_console_admins" {
+  realm_id = keycloak_realm.nimbus.id
+  name     = "consoleAdmin"
+}
+
 # Put the seed admin in app-admin groups so smoke tests work without manual
 # UI clicks. 7c: grafana-admins → Grafana Admin. 7d: vault-admins → Vault admin policy.
 resource "keycloak_user_groups" "nimbus_admin_groups" {
@@ -114,6 +122,7 @@ resource "keycloak_user_groups" "nimbus_admin_groups" {
   user_id  = keycloak_user.nimbus_admin.id
   group_ids = [
     keycloak_group.grafana_admins.id,
+    keycloak_group.minio_console_admins.id,
     keycloak_group.vault_admins.id,
   ]
 }

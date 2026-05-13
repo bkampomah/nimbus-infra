@@ -56,17 +56,15 @@ write_files:
 %{ if oidc_issuer_url != "" ~}
 
       # ── Phase 7c — OIDC SSO via Keycloak ─────────────────────────────────
-      # When ROLE_POLICY is set, every OIDC user gets that policy. Phase 8
-      # hardening: switch to claim-based per-group policy mapping (drop
-      # ROLE_POLICY, set CLAIM_NAME=policy, build a Keycloak claim mapper
-      # that emits the right policy name per user).
+      # Phase 8: MinIO reads Keycloak group names as policy names. Only users
+      # in a group matching an existing MinIO policy get permissions.
       MINIO_IDENTITY_OPENID_CONFIG_URL=${oidc_issuer_url}/.well-known/openid-configuration
       MINIO_IDENTITY_OPENID_CLIENT_ID=${oidc_client_id}
       MINIO_IDENTITY_OPENID_CLIENT_SECRET=${oidc_client_secret}
       MINIO_IDENTITY_OPENID_DISPLAY_NAME=Keycloak
       MINIO_IDENTITY_OPENID_SCOPES=openid,profile,email
       MINIO_IDENTITY_OPENID_REDIRECT_URI=${console_redirect_uri}
-      MINIO_IDENTITY_OPENID_ROLE_POLICY=${oidc_role_policy}
+      MINIO_IDENTITY_OPENID_CLAIM_NAME=${oidc_policy_claim_name}
 %{ endif ~}
 
 %{ if nimbus_ca_pem != "" ~}
@@ -116,6 +114,11 @@ write_files:
     content: |
       #!/bin/bash
       set -euo pipefail
+
+      MC=/usr/local/bin/mc.minio
+      MC_CONFIG_DIR=/root/.mc.minio
+      install -d -o root -g root -m 0700 "$${MC_CONFIG_DIR}"
+
       # Wait for MinIO API to come up
       for i in $(seq 1 60); do
         if curl -sf http://127.0.0.1:9000/minio/health/live >/dev/null; then
@@ -124,15 +127,22 @@ write_files:
         sleep 1
       done
       # Configure mc alias
-      mc alias set local http://127.0.0.1:9000 "${minio_root_user}" "${minio_root_password}"
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" alias set local http://127.0.0.1:9000 "${minio_root_user}" "${minio_root_password}"
       # Create initial bucket with versioning (idempotent)
-      mc mb --ignore-existing local/${minio_bucket}
-      mc version enable local/${minio_bucket}
-      # Create pg-backups bucket with versioning
-      mc mb --ignore-existing local/pg-backups
-      mc version enable local/pg-backups
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" mb --ignore-existing local/${minio_bucket}
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" version enable local/${minio_bucket}
+      # Create pg-backups bucket with object lock and versioning. Object lock
+      # can only be enabled when the bucket is created, so existing buckets
+      # without lock need a one-time migration if retention set warns below.
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" mb --ignore-existing --with-lock local/pg-backups
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" version enable local/pg-backups
+      if HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" retention set --recursive --default "${pgbackup_retention_mode}" "${pgbackup_retention_duration}" local/pg-backups; then
+        echo "pg-backups default retention: ${pgbackup_retention_mode} ${pgbackup_retention_duration}"
+      else
+        echo "WARN: pg-backups retention not set; bucket may predate object lock and require migration" >&2
+      fi
       # Create scoped service account for pg-backup writer
-      mc admin user add local "${pgbackup_access_key}" "${pgbackup_secret_key}"
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" admin user add local "${pgbackup_access_key}" "${pgbackup_secret_key}"
       cat > /tmp/pgbackup-policy.json <<POLICY
       {
         "Version": "2012-10-17",
@@ -148,11 +158,11 @@ write_files:
         ]
       }
       POLICY
-      mc admin policy create local pgbackup-writer /tmp/pgbackup-policy.json
-      mc admin policy attach local pgbackup-writer --user "${pgbackup_access_key}"
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" admin policy create local pgbackup-writer /tmp/pgbackup-policy.json
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" admin policy attach local pgbackup-writer --user "${pgbackup_access_key}"
       rm -f /tmp/pgbackup-policy.json
       # Create scoped service account for Nextcloud primary object storage
-      mc admin user add local "${nextcloud_access_key}" "${nextcloud_secret_key}"
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" admin user add local "${nextcloud_access_key}" "${nextcloud_secret_key}"
       cat > /tmp/nextcloud-data-policy.json <<POLICY
       {
         "Version": "2012-10-17",
@@ -184,14 +194,14 @@ write_files:
         ]
       }
       POLICY
-      mc admin policy create local nextcloud-data-rw /tmp/nextcloud-data-policy.json
-      mc admin policy attach local nextcloud-data-rw --user "${nextcloud_access_key}"
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" admin policy create local nextcloud-data-rw /tmp/nextcloud-data-policy.json
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" admin policy attach local nextcloud-data-rw --user "${nextcloud_access_key}"
       rm -f /tmp/nextcloud-data-policy.json
 
       # Phase 7b — kc-backups bucket + scoped writer for Keycloak realm exports.
-      mc mb --ignore-existing local/kc-backups
-      mc version enable local/kc-backups
-      mc admin user add local "${kc_backup_access_key}" "${kc_backup_secret_key}"
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" mb --ignore-existing local/kc-backups
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" version enable local/kc-backups
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" admin user add local "${kc_backup_access_key}" "${kc_backup_secret_key}"
       cat > /tmp/kc-backup-policy.json <<POLICY
       {
         "Version": "2012-10-17",
@@ -207,8 +217,8 @@ write_files:
         ]
       }
       POLICY
-      mc admin policy create local kc-backup-writer /tmp/kc-backup-policy.json
-      mc admin policy attach local kc-backup-writer --user "${kc_backup_access_key}"
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" admin policy create local kc-backup-writer /tmp/kc-backup-policy.json
+      HOME=/root "$${MC}" --no-color --config-dir "$${MC_CONFIG_DIR}" admin policy attach local kc-backup-writer --user "${kc_backup_access_key}"
       rm -f /tmp/kc-backup-policy.json
       echo "MinIO bootstrap complete"
 
@@ -341,8 +351,9 @@ runcmd:
   - useradd -r -s /sbin/nologin -d /mnt/minio minio-user || true
   - curl -sSfLo /usr/local/bin/minio https://dl.min.io/server/minio/release/linux-amd64/minio
   - chmod +x /usr/local/bin/minio
-  - curl -sSfLo /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-amd64/mc
-  - chmod +x /usr/local/bin/mc
+  # Install as mc.minio, not mc, to avoid collision with Midnight Commander.
+  - curl -sSfLo /usr/local/bin/mc.minio https://dl.min.io/client/mc/release/linux-amd64/mc
+  - chmod +x /usr/local/bin/mc.minio
   - chown -R minio-user:minio-user /mnt/minio
 
   # --- Install service + env, start ------------------------------------

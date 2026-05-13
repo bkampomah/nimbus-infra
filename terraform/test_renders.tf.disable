@@ -73,19 +73,21 @@ locals {
       pgbackup_access_key  = "pgbackup"
       pgbackup_secret_key  = "secret"
       nextcloud_access_key = "nc"
-      nextcloud_secret_key = "secret"
-      kc_backup_access_key = "kc-backup"
-      kc_backup_secret_key = "secret"
-      api_allow_cidrs      = ["10.0.0.0/16"]
-      console_allow_cidrs  = ["10.0.100.0/24"]
-      mgmt_allow_cidrs     = ["10.0.100.0/24"]
-      loki_url             = "http://10.0.100.20:3100"
-      oidc_issuer_url      = "https://auth.example.org/realms/nimbus"
-      oidc_client_id       = "minio-console"
-      oidc_client_secret   = "secret"
-      oidc_role_policy     = "consoleAdmin"
-      nimbus_ca_pem        = local.fake_ca_pem
-      console_redirect_uri = "http://10.0.20.101:9001/oauth_callback"
+      nextcloud_secret_key        = "secret"
+      kc_backup_access_key        = "kc-backup"
+      kc_backup_secret_key        = "secret"
+      api_allow_cidrs             = ["10.0.0.0/16"]
+      console_allow_cidrs         = ["10.0.100.0/24"]
+      mgmt_allow_cidrs            = ["10.0.100.0/24"]
+      loki_url                    = "http://10.0.100.20:3100"
+      oidc_issuer_url             = "https://auth.example.org/realms/nimbus"
+      oidc_client_id              = "minio-console"
+      oidc_client_secret          = "secret"
+      oidc_policy_claim_name      = "groups"
+      pgbackup_retention_mode     = "COMPLIANCE"
+      pgbackup_retention_duration = "30d"
+      nimbus_ca_pem               = local.fake_ca_pem
+      console_redirect_uri        = "http://10.0.20.101:9001/oauth_callback"
     })
 
     monitoring = templatefile("${path.module}/modules/monitoring/user-data.yml.tftpl", {

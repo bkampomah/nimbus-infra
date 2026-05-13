@@ -26,6 +26,19 @@ variable "proxmox_ssh_username" {
   default     = "root"
 }
 
+variable "proxmox_ssh_agent" {
+  description = "Use ssh-agent for Proxmox file uploads by the provider"
+  type        = bool
+  default     = true
+}
+
+variable "proxmox_ssh_private_key_file" {
+  description = "Optional private key path for Proxmox file uploads when ssh-agent auth is unavailable"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "proxmox_node" {
   description = "Name of the Proxmox node VMs should be created on (see `pvesh get /nodes`)"
   type        = string

@@ -21,12 +21,13 @@ through the ALB:
 | `nimbus-alb.nimbus.local` | 10.0.1.10 | — (direct ALB access) |
 | `cloud.nimbus.local` | 10.0.1.10 | AIO at 10.0.10.101:11000 |
 | `cloud.nimbusnode.org` | 10.0.1.10 (split-horizon) | AIO at 10.0.10.101:11000 |
+| `aio.nimbusnode.org` | 10.0.1.10 (split-horizon) | AIO at 10.0.10.101:11000 |
 | `cloud-app.nimbus.local` | 10.0.1.10 | New Nextcloud at 10.0.10.102:80 |
 | IP SAN | 10.0.1.10 | — |
 
-External traffic for `cloud.nimbusnode.org` still goes via Cloudflare → AIO's
-own cloudflared daemon (independent of this cert — Cloudflare handles external
-TLS). The self-CA cert is strictly for internal VPN/LAN clients.
+External traffic for `cloud.nimbusnode.org` and `aio.nimbusnode.org` still
+goes via Cloudflare. The self-CA cert is strictly for internal VPN/LAN clients
+that resolve those names to the ALB.
 
 ---
 
