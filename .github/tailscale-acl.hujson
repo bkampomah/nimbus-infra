@@ -1,0 +1,84 @@
+// Nimbus tailnet policy.
+//
+// The Proxmox-hosted Tailscale LXC is the stable subnet router and exit node.
+// Tag it as `tag:nimbus-subnet-router` and advertise:
+//   - 10.0.0.0/16      Nimbus VPC
+//   - 192.168.1.0/24   Home LAN
+//
+// Tailscale policy files are HuJSON, so comments and trailing commas are valid.
+{
+  "tagOwners": {
+    "tag:nimbus-subnet-router": ["autogroup:admin"],
+  },
+
+  "hosts": {
+    "nimbus-vpc": "10.0.0.0/16",
+    "nimbus-public": "10.0.1.0/24",
+    "nimbus-app": "10.0.10.0/24",
+    "nimbus-data": "10.0.20.0/24",
+    "nimbus-mgmt": "10.0.100.0/24",
+    "home-lan": "192.168.1.0/24",
+
+    "nimbus-alb": "10.0.1.10",
+    "nimbus-bastion": "10.0.1.20",
+    "nimbus-cloud-01": "10.0.10.102",
+    "nimbus-aio": "10.0.10.101",
+    "nimbus-s3": "10.0.20.101",
+    "nimbus-rds": "10.0.20.103",
+    "nimbus-dns": "10.0.100.10",
+    "nimbus-mon": "10.0.100.20",
+    "nimbus-iam": "10.0.100.30",
+    "nimbus-vault": "10.0.100.40",
+  },
+
+  "autoApprovers": {
+    "routes": {
+      "10.0.0.0/16": ["tag:nimbus-subnet-router"],
+      "192.168.1.0/24": ["tag:nimbus-subnet-router"],
+    },
+    "exitNode": ["tag:nimbus-subnet-router"],
+  },
+
+  "grants": [
+    // Keep normal personal-device behavior.
+    {
+      "src": ["autogroup:member"],
+      "dst": ["autogroup:self"],
+      "ip": ["*"],
+    },
+
+    // Public-ish Nimbus app entrypoints through the ALB plus internal DNS.
+    {
+      "src": ["autogroup:member"],
+      "dst": ["nimbus-alb"],
+      "ip": ["tcp:80", "tcp:443"],
+    },
+    {
+      "src": ["autogroup:member"],
+      "dst": ["nimbus-dns"],
+      "ip": ["tcp:53", "udp:53"],
+    },
+
+    // Admins can operate the lab, including private control-plane services.
+    {
+      "src": ["autogroup:admin"],
+      "dst": ["nimbus-vpc", "home-lan"],
+      "ip": ["*"],
+    },
+    {
+      "src": ["autogroup:admin"],
+      "dst": ["autogroup:member", "autogroup:tagged"],
+      "ip": ["*"],
+    },
+
+    // Only admins may use the LXC as an exit node.
+    {
+      "src": ["autogroup:admin"],
+      "dst": ["autogroup:internet"],
+      "ip": ["*"],
+    },
+  ],
+
+  // Add `tests` after pinning real admin/member identities, for example
+  // `you@example.com`, because policy tests evaluate a representative identity.
+}

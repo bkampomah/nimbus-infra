@@ -1,0 +1,44 @@
+name: tailscale-acl
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/tailscale-acl.hujson
+      - .github/workflows/tailscale-acl.yml
+  push:
+    branches: [main]
+    paths:
+      - .github/tailscale-acl.hujson
+      - .github/workflows/tailscale-acl.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test tailnet policy
+        if: github.event_name == 'pull_request'
+        uses: tailscale/gitops-acl-action@v1
+        with:
+          tailnet: ${{ secrets.TS_TAILNET }}
+          oauth-client-id: ${{ secrets.TS_OAUTH_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          policy-file: .github/tailscale-acl.hujson
+          action: test
+
+      - name: Apply tailnet policy
+        if: github.event_name != 'pull_request'
+        uses: tailscale/gitops-acl-action@v1
+        with:
+          tailnet: ${{ secrets.TS_TAILNET }}
+          oauth-client-id: ${{ secrets.TS_OAUTH_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          policy-file: .github/tailscale-acl.hujson
+          action: apply
